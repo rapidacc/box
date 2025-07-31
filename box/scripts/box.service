@@ -229,9 +229,12 @@ prepare_singbox() {
   # 设置 auto_detect_interface/auto_route
   ${yq} '.route.auto_detect_interface = true' -i --output-format=json "${sing_config}"
   ${yq} '(.inbounds[] | select(.type == "tun") | .auto_route) |= true' -i --output-format=json "${sing_config}"
+  
+  # 确保日志路径是绝对路径
+  ${yq} '.log.output = "'"${box_run}/${bin_name}.log"'"' -i --output-format=json "${sing_config}" 2>/dev/null || true
 
   # 格式化 sing-box 配置
-  if ${bin_path} format -w -D "${box_dir}/${bin_name}" -C "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
+  if ${bin_path} format -w -c "${sing_config}" > "${box_run}/${bin_name}.log" 2>&1; then
     # 根据 network_mode 设置 auto_route
     if [[ "${network_mode}" == @(mixed|tun) ]]; then
       # 检查配置中是否有 "type": "tun"
@@ -255,7 +258,7 @@ prepare_singbox() {
       fi
     else
       # 非 tun 模式，关闭 auto_route
-      sed -i -e 's/auto_route": true/auto_route": false/g' -e 's/"auto_detect_interface": true/"auto_detect_interface": false/g' "${box_dir}/sing-box/"*.json
+      sed -i -e 's/auto_route": true/auto_route": false/g' -e 's/"auto_detect_interface": true/"auto_detect_interface": false/g' "${sing_config}"
 
       # 检查是否有 tproxy 配置
       if ! busybox grep -q '"type": "tproxy"' "${sing_config}"; then
@@ -268,11 +271,9 @@ prepare_singbox() {
       ${yq} 'del(.inbounds[] | select(.type == "tun"))' -i --output-format=json "${sing_config}"
 
       # 同步 tproxy 端口
-      for file in "${box_dir}/sing-box/"*.json; do
-        if busybox grep -q '"type": "tproxy"' "${file}"; then
-          ${yq} '(.inbounds[] | select(.type == "tproxy") | .listen_port) = '"${tproxy_port}" -i --output-format=json "${file}"
-        fi
-      done
+      if busybox grep -q '"type": "tproxy"' "${sing_config}"; then
+        ${yq} '(.inbounds[] | select(.type == "tproxy") | .listen_port) = '"${tproxy_port}" -i --output-format=json "${sing_config}"
+      fi
     fi
 
     # 为 tun 添加 include_uid/exclude_uid 和删除旧 package 字段
@@ -307,11 +308,9 @@ prepare_singbox() {
       fi
 
       # 同步 redir_port 端口
-      for file in "${box_dir}/sing-box/"*.json; do
-        if busybox grep -q '"type": "redirect"' "${file}"; then
-          ${yq} '(.inbounds[] | select(.type == "redirect") | .listen_port) = '"${redir_port}" -i --output-format=json "${file}"
-        fi
-      done
+      if busybox grep -q '"type": "redirect"' "${sing_config}"; then
+        ${yq} '(.inbounds[] | select(.type == "redirect") | .listen_port) = '"${redir_port}" -i --output-format=json "${sing_config}"
+      fi
     fi
   else
     log Error "$<"${box_run}/${bin_name}.log")"
@@ -471,8 +470,9 @@ box_run_bin() {
       if [ "${auto_modify_config}" = "true" ]; then
         prepare_singbox
       fi
-      if ${bin_path} check -D "${box_dir}/${bin_name}" -C "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
-        ${RUN_CMD} "${bin_path}" run -D "${box_dir}/${bin_name}" -C "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
+      if ${bin_path} check -c "${sing_config}" > "${box_run}/${bin_name}.log" 2>&1; then
+        # 使用--directory参数指定工作目录
+        ${RUN_CMD} "${bin_path}" run -c "${sing_config}" --directory "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
         PID=$!
         echo -n $PID > "${box_pid}"
       else
@@ -586,7 +586,7 @@ box_bin_status() {
     return 1
   fi
 
-  stack=$(if [ "${bin_name}" != "mihomo" ]; then find "/data/adb/box/sing-box" -type f -name "*.json" -exec busybox awk -F'"' '/"stack"/{print $4}' {} +; else busybox awk '!/^ *#/ && /stack: / { print $2;found=1; exit}' "${mihomo_config}"; fi)
+  stack=$(if [ "${bin_name}" != "mihomo" ]; then busybox awk -F'"' '/"stack"/{print $4}' "${sing_config}"; else busybox awk '!/^ *#/ && /stack: / { print $2;found=1; exit}' "${mihomo_config}"; fi)
   TOAST=1 log Info "${bin_name} 服务正在运行"
 
   log Info "代理模式: ${proxy_mode} + 网络模式: ${network_mode} + $(if [[ "${network_mode}" == @(mixed|tun) ]]; then echo "协议栈: ${stack}"; fi)"

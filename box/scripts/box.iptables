@@ -37,13 +37,13 @@ case "${bin_name}" in
     ;;
   "sing-box")
     if [[ "${network_mode}" == @(mixed|tun) ]]; then
-      tun_device=$(find "${box_dir}/sing-box/" -maxdepth 1 -type f -name "*.json" -exec busybox grep -oE '"interface_name": "[^"]*' {} + | busybox awk -F'"' '{print $4}' 2>/dev/null | head -n 1)
+      tun_device=$(busybox grep -oE '"interface_name": "[^"]*' "${sing_config}" | busybox awk -F'"' '{print $4}' 2>/dev/null | head -n 1)
       if [ -z "$tun_device" ]; then
         tun_device="tun0"
       fi
     fi
-    fake_ip_range=$(find ${box_dir}/sing-box/ -maxdepth 1 -type f -name "*.json" -exec busybox awk -F'"' '/inet4_range/ {print $4}' {} +)
-    fake_ip6_range=$(find ${box_dir}/sing-box/ -maxdepth 1 -type f -name "*.json" -exec busybox awk -F'"' '/inet6_range/ {print $4}' {} +)
+    fake_ip_range=$(busybox awk -F'"' '/inet4_range/ {print $4}' "${sing_config}")
+    fake_ip6_range=$(busybox awk -F'"' '/inet6_range/ {print $4}' "${sing_config}")
     ;;
   "hysteria")
     # 验证 hysteria 的 network_mode
@@ -325,17 +325,18 @@ start_redirect() {
     ${iptables} -t nat -A BOX_EXTERNAL -j LOCAL_IP_V4
     ${iptables} -t nat -A BOX_LOCAL -j LOCAL_IP_V4
 
-    ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i lo -j REDIRECT --to-ports "${redir_port}"
+    # 对非环回接口的所有TCP流量进行重定向，避免硬编码接口名称
+    ${iptables} -t nat -A BOX_EXTERNAL -p tcp ! -i lo -j REDIRECT --to-ports "${redir_port}"
 
     if [ "${ap_list}" != "" ]; then
-      for ap in "${ap_list[@]}"; do
-        ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i "${ap}" -j REDIRECT --to-ports "${redir_port}"
-      done
         [ ${network_mode} = "enhance" ] || log Info "${ap_list[*]} 透明代理。"
     fi
 
     ${iptables} -t nat -I PREROUTING -j BOX_EXTERNAL
+    # 优先放行代理应用本身，防止回环
     ${iptables} -t nat -I BOX_LOCAL -m owner --uid-owner "${box_user}" --gid-owner "${box_group}" -j RETURN
+    # 其次放行所有到 lo 接口的流量
+    ${iptables} -t nat -I BOX_LOCAL -o lo -j RETURN
 
     if [ "${ignore_out_list}" != "" ]; then
       for ignore in "${ignore_out_list[@]}"; do
@@ -428,12 +429,14 @@ stop_redirect() {
   if [ "${iptables}" = "$IPV" ]; then
     # ${iptables} -t nat -D BOX_EXTERNAL -d "${fake_ip_range}" -p icmp -j DNAT --to-destination 127.0.0.1
     # ${iptables} -t nat -D BOX_LOCAL -d "${fake_ip_range}" -p icmp -j DNAT --to-destination 127.0.0.1
-    ${iptables} -t nat -F BOX_EXTERNAL
-    ${iptables} -t nat -X BOX_EXTERNAL
-    ${iptables} -t nat -F BOX_LOCAL
-    ${iptables} -t nat -X BOX_LOCAL
-    ${iptables} -t nat -F LOCAL_IP_V4
-    ${iptables} -t nat -X LOCAL_IP_V4
+    ${iptables} -t nat -D PREROUTING -j BOX_EXTERNAL 2>/dev/null
+    ${iptables} -t nat -D OUTPUT -j BOX_LOCAL 2>/dev/null
+    ${iptables} -t nat -F BOX_EXTERNAL 2>/dev/null
+    ${iptables} -t nat -X BOX_EXTERNAL 2>/dev/null
+    ${iptables} -t nat -F BOX_LOCAL 2>/dev/null
+    ${iptables} -t nat -X BOX_LOCAL 2>/dev/null
+    ${iptables} -t nat -F LOCAL_IP_V4 2>/dev/null
+    ${iptables} -t nat -X LOCAL_IP_V4 2>/dev/null
   fi
 }
 
@@ -504,6 +507,10 @@ start_tproxy() {
   ${iptables} -t mangle -N BOX_LOCAL
   ${iptables} -t mangle -F BOX_LOCAL
 
+  if [ "${iptables}" = "$IP6V" ]; then
+    ${iptables} -t mangle -A BOX_LOCAL -o lo -j RETURN
+    ${iptables} -t mangle -A BOX_LOCAL -d ::1/128 -j RETURN
+  fi
   ${iptables} -t mangle -A BOX_LOCAL -m owner --uid-owner ${box_user} --gid-owner ${box_group} -j RETURN
   # ${iptables} -t mangle -A BOX_LOCAL -m mark --mark ${routing_mark} -j RETURN
 

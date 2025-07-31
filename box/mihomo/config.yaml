@@ -65,10 +65,6 @@ sniffer:
       ports: [443, 8443]
     QUIC:
       ports: [443, 8443]
-  skip-domain:
-    - "+.douyinpic.com"
-    - "+.douyincdn.com"
-    - "+.amemv.com"
 
 tun:
   enable: false
@@ -165,7 +161,7 @@ proxy-groups:
 
   - name: 主要节点
     type: select
-    proxies: [手动切换, 自动选择, 故障转移组, 自动选择_香港, 自动选择_台湾, 自动选择_新加坡, 自动选择_日本, 自动选择_美国, 国内直连, REJECT]
+    proxies: [自动选择, 手动切换, 故障转移组, 自动选择_香港, 自动选择_台湾, 自动选择_新加坡, 自动选择_日本, 自动选择_美国, 国内直连, REJECT]
     icon: https://gitlab.com/akikawa/backup/-/raw/main/IconSet/Color/Star.png
 
   - name: 手动切换

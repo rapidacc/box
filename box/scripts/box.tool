@@ -4,6 +4,9 @@
 LOG_FILE="/data/adb/box/run/tool.log"
 mkdir -p "$(dirname "$LOG_FILE")"
 
+# 保存原始的文件描述符
+exec 3>&1 4>&2
+
 # 将标准输出和标准错误重定向到日志文件，每次运行时覆盖
 exec > "$LOG_FILE" 2>&1
 echo "box.tool 脚本启动于: $(date)"
@@ -104,7 +107,7 @@ restart_box() {
 check() {
   case "${bin_name}" in
     sing-box)
-      if ${bin_path} check -D "${box_dir}/${bin_name}" --config-directory "${box_dir}/sing-box" > "${box_run}/${bin_name}_report.log" 2>&1; then
+      if ${bin_path} check -c "${sing_config}" > "${box_run}/${bin_name}_report.log" 2>&1; then
         log Info "${sing_config} 检查通过"
       else
         log Debug "${sing_config}"
@@ -149,8 +152,8 @@ check() {
 
 # 重载基础配置
 reload() {
-  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else find /data/adb/box/sing-box/ -type f -name 'config.json' -exec busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' {} \; | sed 's/^[ \t]*//;s/"//g'; fi;)
-  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else find /data/adb/box/sing-box/ -type f -name 'config.json' -exec busybox awk -F'"' '/"secret"/ {print $4}' {} \; | head -n 1; fi;)
+  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
+  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
 
   curl_command="curl"
   if ! command -v curl >/dev/null 2>&1; then
@@ -861,8 +864,10 @@ cgroup_cpuset() {
 }
 
 webroot() {
-  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else find /data/adb/box/sing-box/ -type f -name 'config.json' -exec busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' {} \; | sed 's/^[ \t]*//;s/"//g'; fi;)
-  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else find /data/adb/box/sing-box/ -type f -name 'config.json' -exec busybox awk -F'"' '/"secret"/ {print $4}' {} \; | head -n 1; fi;)
+  exec 1>&3 2>&4
+  
+  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
+  secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
   path_webroot="/data/adb/modules/box_for_root/webroot/index.html"
   touch "$path_webroot"
   if [[ "${bin_name}" = @(mihomo|sing-box) ]]; then
@@ -899,6 +904,8 @@ webroot() {
   </body>
   </html>' > $path_webroot
   fi
+  
+  exec > "$LOG_FILE" 2>&1
 }
 
 bond0() {
