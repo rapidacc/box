@@ -470,9 +470,8 @@ box_run_bin() {
       if [ "${auto_modify_config}" = "true" ]; then
         prepare_singbox
       fi
-      if ${bin_path} check -c "${sing_config}" > "${box_run}/${bin_name}.log" 2>&1; then
-        # 使用--directory参数指定工作目录
-        ${RUN_CMD} "${bin_path}" run -c "${sing_config}" --directory "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
+      if ${bin_path} check -c "${sing_config}" -D "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
+        ${RUN_CMD} "${bin_path}" run -c "${sing_config}" -D "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
         PID=$!
         echo -n $PID > "${box_pid}"
       else
