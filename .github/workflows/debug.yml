@@ -21,13 +21,17 @@ jobs:
 
       - name: Update Module.prop
         run: |
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')($(git log --oneline -n 1 | awk '{print $1}'))/g" module.prop
+          dos2unix module.prop || true
+          
+          VERSION=$(grep -oP 'version=\K[^ ]+' module.prop | tr -d '\r')
+          sed -i "s/$VERSION/$VERSION($(git log --oneline -n 1 | awk '{print $1}'))/g" module.prop
           sed -i "s/versionCode=.*/versionCode=$(date +%Y%m%d)/g" module.prop
 
       - name: Get Version
         id: get_version
         run: |
-          echo "version=$(grep -oP 'version=\K[^ ]+' module.prop)" >> "$GITHUB_OUTPUT"
+          VERSION=$(grep -oP 'version=\K[^ ]+' module.prop | tr -d '\r')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
         
       - name: Generate Asset
         run: |
@@ -51,6 +55,6 @@ jobs:
 
       - name: run build
         run: |
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}')($(git log --oneline -n 1 | awk '{print $1}'))/g" module.prop
-          zip -r -o -X -ll box_for_root-$(cat module.prop | grep 'version=' | awk -F '=' '{print $2}').zip ./ -x '.git/*' -x 'CHANGELOG.md' -x 'update.json' -x 'build.sh' -x '.github/*' -x 'docs/*'
+          chmod +x build.sh
+          ./build.sh
 

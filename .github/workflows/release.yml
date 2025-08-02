@@ -1,4 +1,4 @@
-name: 发布版本
+name: release
 
 on:
   workflow_dispatch:
@@ -9,75 +9,83 @@ on:
       branch:
         description: '目标分支（用于版本文件更新）'
         required: true
+      changelog:
+        description: '更新日志内容'
+        required: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
+
     steps:
-      - uses: actions/checkout@v4.1.0
+      # 1. Checkout repository
+      - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.branch }}
-          token: ${{ secrets.PAT }}
-          
-      - name: 获取版本
+          fetch-depth: 0
+
+      # 2. Generate version date
+      - name: Get Version
         id: get_version
-        run: |
-          echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
+        run: echo "date=$(date +%Y%m%d)" >> "$GITHUB_OUTPUT"
 
-      - name: 更新update.json和module.prop
+      # 3. Update update.json, module.prop, and CHANGELOG.md
+      - name: Update files
         run: |
-          echo '{
-            "version": "${{ github.event.inputs.tag }}",
-            "versionCode": "${{ steps.get_version.outputs.date }}",
-            "zipUrl": "https://github.com/boxproxy/box/releases/download/${{ github.event.inputs.tag }}/box_${{ github.event.inputs.tag }}.zip",
+          VERSION="${{ github.event.inputs.tag }}"
+          DATE_NUM="${{ steps.get_version.outputs.date }}"
+          DATE_HUMAN=$(date +%d-%m-%Y)
+          CHANGELOG="${{ github.event.inputs.changelog }}"
+          dos2unix module.prop || true
+
+          # update.json
+          cat > update.json <<EOF
+          {
+            "version": "$VERSION",
+            "versionCode": "$DATE_NUM",
+            "zipUrl": "https://github.com/boxproxy/box/releases/download/$VERSION/box-$VERSION.zip",
             "changelog": "https://github.com/boxproxy/box/raw/master/CHANGELOG.md"
-          }' > update.json
+          }
+          EOF
 
-          sed -i "s/$(grep -oP 'version=\K[^ ]+' module.prop)/${{ github.event.inputs.tag }}/g" module.prop
-          sed -i "s/$(grep -oP 'versionCode=\K[^ ]+' module.prop)/$(date +%Y%m%d)/g" module.prop
-          
-      - name: 提交更新的文件
-        run: |
-          git config --local user.name "GitHub Actions"
-          git config --local user.email "actions@github.com"
-          git add update.json module.prop
-          
-          # 检查是否有变更需要提交
-          if git diff --staged --quiet; then
-            echo "没有文件变更，跳过提交步骤"
-          else
-            git commit -m "发布 ${{ github.event.inputs.tag }}"
-            git push origin ${{ github.event.inputs.branch }}
-          fi
- 
-      - name: 运行build.sh
-        run: |
-          sh build.sh
-          ls -la
-          
-      - name: 设置输出文件名
-        id: set_filename
-        run: |
-          if ls box_*.zip 1> /dev/null 2>&1; then
-            echo "filename_pattern=box_*.zip" >> "$GITHUB_OUTPUT"
-          elif ls box-*.zip 1> /dev/null 2>&1; then
-            echo "filename_pattern=box-*.zip" >> "$GITHUB_OUTPUT"
-          elif ls box_${{ github.event.inputs.tag }}.zip 1> /dev/null 2>&1; then
-            echo "filename_pattern=box_${{ github.event.inputs.tag }}.zip" >> "$GITHUB_OUTPUT"
-          elif ls box-${{ github.event.inputs.tag }}.zip 1> /dev/null 2>&1; then
-            echo "filename_pattern=box-${{ github.event.inputs.tag }}.zip" >> "$GITHUB_OUTPUT"
-          else
-            echo "filename_pattern=*.zip" >> "$GITHUB_OUTPUT"
-          fi
-          echo "找到匹配的文件模式: ${{ steps.set_filename.outputs.filename_pattern }}"
+          # module.prop
+          sed -i "s/^version=.*/version=$VERSION/" module.prop
+          sed -i "s/^versionCode=.*/versionCode=$DATE_NUM/" module.prop
 
-      - name: 创建GitHub发布
+          # Changelog
+          if [ ! -f CHANGELOG.md ]; then
+            echo "# Changelog" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+          fi
+          {
+            echo "#### Changelog $VERSION - $DATE_HUMAN"
+            echo "$CHANGELOG" | sed 's/^/- /'
+            echo ""
+            cat CHANGELOG.md
+          } > CHANGELOG.tmp && mv CHANGELOG.tmp CHANGELOG.md
+
+      # 4. Commit and push changes
+      - name: Commit and push changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add update.json module.prop CHANGELOG.md
+          git commit -m "${{ github.event.inputs.tag }}" || echo "No changes to commit"
+          git push origin "${{ github.event.inputs.branch }}" --force
+
+      # 5. Run build script
+      - name: Run build.sh
+        run: |
+          chmod +x build.sh
+          ./build.sh
+
+      # 6. Create GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ github.event.inputs.tag }}
-          files: ${{ steps.set_filename.outputs.filename_pattern }}
+          files: box-*.zip
           generate_release_notes: true
-          token: ${{ secrets.PAT }}
+          body: |
+            #### Changelog ${{ github.event.inputs.tag }}
+            ${{ github.event.inputs.changelog }}
 

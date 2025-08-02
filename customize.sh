@@ -133,11 +133,14 @@ handle_choice() {
     ui_print "- [ 音量加(+) ]: ${choice_yes}"
     ui_print "- [ 音量减(-) ]: ${choice_no}"
     
+    start_key_listener
     if volume_key_detection; then
         ui_print "  => 您选择了: ${choice_yes}"
+        stop_key_listener
         return 0
     else
         ui_print "  => 您选择了: ${choice_no}"
+        stop_key_listener
         return 1
     fi
 }
@@ -147,11 +150,10 @@ ui_print "==========================================================="
 ui_print "==         Box for Magisk/KernelSU/APatch 安装程序         =="
 ui_print "==========================================================="
 
-start_key_listener
 
 if handle_choice "是否需要下载内核或数据文件？" "是，进行下载" "否，全部跳过"; then
 
-    if handle_choice "是否使用 'ghfast.top' 镜像加速接下来的下载？" "使用加速" "直接下载"; then
+    if handle_choice "是否使用 'gh-proxy.com' 镜像加速接下来的下载？" "使用加速" "直接下载"; then
         ui_print "- 已启用 ghproxy 加速。"
         sed -i 's/use_ghproxy=.*/use_ghproxy="true"/' /data/adb/box/settings.ini
     else
@@ -242,7 +244,6 @@ else
     ui_print "- 已跳过所有下载步骤。"
 fi
 
-stop_key_listener
 
 if [ "${backup_box}" = "true" ]; then
   ui_print " "

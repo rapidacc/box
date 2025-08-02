@@ -19,7 +19,7 @@ scripts_dir="${0%/*}"
 # user agent
 user_agent="box_for_root"
 # 是否使用 ghproxy 加速 GitHub 下载
-url_ghproxy="https://ghfast.top"
+url_ghproxy="https://gh-proxy.com"
 use_ghproxy="false"
 # 启用/禁用下载稳定的 mihomo 内核
 mihomo_stable="enable"
