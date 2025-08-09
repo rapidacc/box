@@ -303,5 +303,5 @@ rules:
   - OR,((RULE-SET,google_ip,no-resolve),(RULE-SET,google_domain)),谷歌服务
   - RULE-SET,microsoft_domain,微软服务
   - RULE-SET,awavenue,广告拦截
-  - OR,((RULE-SET,cn_ip,no-resolve),(RULE-SET,cn_domain),(RULE-SET,private_ip,no-resolve),(RULE-SET,private_domain)),国内直连
+  - OR,((RULE-SET,cn_ip),(RULE-SET,cn_domain),(RULE-SET,private_ip),(RULE-SET,private_domain)),国内直连
   - MATCH,漏网之鱼

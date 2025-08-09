@@ -96,13 +96,13 @@ box_check_logs() {
 
 box_bin_alive() {
   local PID=$(<"${box_pid}" 2>/dev/null)
-  if ! kill -0 "$PID" 2>/dev/null; then
+  if ! kill -0 "$PID" >/dev/null; then
     log Error "$<"${box_run}/${bin_name}.log")"
     log Error "${bin_name} 服务未运行。"
     log Error "请检查 ${bin_name}.log 获取详细信息。"
     log Error "清理无效 pid $PID"
     for bin in "${bin_list[@]}"; do
-      killall -15 "${bin}" >/dev/null 2>&1 || busybox pkill -15 "${bin}" >/dev/null 2>&1 
+      killall -15 "${bin}" >/dev/null || busybox pkill -15 "${bin}" >/dev/null 2>&1 
     done
     "${scripts_dir}/box.iptables" disable >/dev/null 2>&1
     [ -f "${box_pid}" ] && rm -f "${box_pid}"
@@ -114,7 +114,7 @@ box_bin_alive() {
 
 box_run_crontab() {
   # 停止已运行的 crond（可选）
-  pkill -f "busybox crond" > /dev/null 2>&1
+  pkill -f "busybox crond" >/dev/null 2>&1
   # 准备 crontab
   busybox crontab -c "${box_run}" -r
   echo "# root 的定时任务" > "${box_run}/root"
@@ -132,7 +132,7 @@ box_run_crontab() {
     cat "${box_dir}/crontab.cfg" >> "${box_run}/root"
     chmod 0644 "${box_run}/root"
     # 后台启动 crond
-    nohup busybox crond -c "${box_run}" > /dev/null 2>&1 &
+    nohup busybox crond -c "${box_run}" >/dev/null 2>&1 &
   else
     log Info "crond 已禁用"
   fi
@@ -439,18 +439,17 @@ box_run_bin() {
   log Info "选择内核: ${bin_name}，启动服务。"
   ulimit -SHn 1000000
 
-  # 为 Go 核心设置内存限制 (单位: MiB)
-  # 您可以在 settings.ini 中添加 memory_limit="200" 来覆盖此默认值
-  local MEM_LIMIT="${memory_limit:-150}MiB"
-  log Info "为核心设置内存限制: ${MEM_LIMIT}"
-  local RUN_CMD="nohup busybox setuidgid ${box_user_group} env GOMEMLIMIT=${MEM_LIMIT}"
+  # 启动服务前刷新 box.tool 日志
+  : > "/data/adb/box/run/tool.log"
 
   case "${bin_name}" in
     hysteria)
       # 同步端口
-      sed -i -e "/tcpTProxy:/,/listen:/s/listen: :.*/listen: :${tproxy_port}/" "${box_dir}/${bin_name}/config.yaml"
-      sed -i -e "/udpTProxy:/,/listen:/s/listen: :.*/listen: :${tproxy_port}/" "${box_dir}/${bin_name}/config.yaml"
-      sed -i -e "/tcpRedirect:/,/listen:/s/listen: :.*/listen: :${redir_port}/" "${box_dir}/${bin_name}/config.yaml"
+      if [ -f "${hysteria_config}" ]; then
+        sed -i -e "/tcpTProxy:/,/listen:/s/listen: :.*/listen: :${tproxy_port}/" "${hysteria_config}"
+        sed -i -e "/udpTProxy:/,/listen:/s/listen: :.*/listen: :${tproxy_port}/" "${hysteria_config}"
+        sed -i -e "/tcpRedirect:/,/listen:/s/listen: :.*/listen: :${redir_port}/" "${hysteria_config}"
+      fi
 
       # 验证 network_mode for hysteria
       case "${network_mode}" in
@@ -462,9 +461,17 @@ box_run_bin() {
           sed -i 's/\(network_mode=\)"[^\"]*"/\1"tproxy"/g' ${settings}
           ;;
       esac
-      ${RUN_CMD} ${bin_path} -c ${box_dir}/${bin_name}/config.yaml > "${bin_log}" 2>&1 &
+      nohup busybox setuidgid "${box_user_group}" "${bin_path}" -c "${hysteria_config}" > "${bin_log}" 2>&1 &
       PID=$!
-      echo -n $PID > "${box_pid}"
+      sleep 1
+      if kill -0 "${PID}" 2>/dev/null; then
+        echo -n "${PID}" > "${box_pid}"
+      else
+        set_description error
+        log Error "$(cat "${box_run}/${bin_name}.log")"
+        log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
+        exit 1
+      fi
       ;;
     sing-box)
       if [ "${auto_modify_config}" = "true" ]; then
@@ -475,6 +482,7 @@ box_run_bin() {
         PID=$!
         echo -n $PID > "${box_pid}"
       else
+        set_description error
         log Error "$<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
@@ -489,6 +497,7 @@ box_run_bin() {
         PID=$!
         echo -n $PID > "${box_pid}"
       else
+        set_description error
         log Error "$<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
@@ -498,17 +507,16 @@ box_run_bin() {
       if [[ "${network_mode}" != "tproxy" ]]; then
         sed -i 's/\(network_mode=\)"[^\"]*"/\1"tproxy"/g' ${settings}
       fi
-      ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | .port) = '"${tproxy_port}"'' -i --output-format=yaml "${box_dir}/${bin_name}/config.yaml" >/dev/null 2>&1
-      ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | select(.tag == "tproxy-in") | .port) = '"${tproxy_port}" -i --output-format=json "${box_dir}/${bin_name}/config.json" >/dev/null 2>&1
-      if [ ! -f "${box_dir}/${bin_name}/config.toml" ] && [ ! -f "${box_dir}/${bin_name}/config.json" ] && [ ! -f "${box_dir}/${bin_name}/config.yaml" ]; then
-        log Error "未找到配置文件，期望 config.toml、config.json 或 config.yaml"
-        if [ -f "${box_pid}" ]; then
-          rm -f "${box_pid}"
-          log Info "已移除 PID 文件: ${box_pid}"
-        fi
+      if [ ! -f "${xray_config}" ]; then
+        log Error "未找到配置文件：${xray_config}"
         exit 1
       else
-        log Info "已找到配置文件 (config.toml, .json, .yaml 之一)"
+        if [[ "${xray_config}" == *.yaml ]]; then
+          ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | .port) = '"${tproxy_port}"'' -i --output-format=yaml "${xray_config}" >/dev/null 2>&1
+        elif [[ "${xray_config}" == *.json ]]; then
+          ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | select(.tag == "tproxy-in") | .port) = '"${tproxy_port}" -i --output-format=json "${xray_config}" >/dev/null 2>&1
+        fi
+        log Info "已定位配置文件：${xray_config}"
       fi
       export XRAY_LOCATION_ASSET="${box_dir}/${bin_name}"
       if ${bin_path} -test -confdir "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
@@ -516,6 +524,7 @@ box_run_bin() {
         PID=$!
         echo -n $PID > "${box_pid}"
       else
+        set_description error
         log Error "$<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
@@ -525,17 +534,16 @@ box_run_bin() {
       if [[ "${network_mode}" != "tproxy" ]]; then
         sed -i 's/\(network_mode=\)"[^\"]*"/\1"tproxy"/g' ${settings}
       fi
-      ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | .port) = '"${tproxy_port}"'' -i --output-format=yaml "${box_dir}/${bin_name}/config.yaml" >/dev/null 2>&1
-      ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | select(.tag == "tproxy-in") | .port) = '"${tproxy_port}" -i --output-format=json "${box_dir}/${bin_name}/config.json" >/dev/null 2>&1
-      if [ ! -f "${box_dir}/${bin_name}/config.toml" ] && [ ! -f "${box_dir}/${bin_name}/config.json" ] && [ ! -f "${box_dir}/${bin_name}/config.yaml" ]; then
-        log Error "未找到配置文件，期望 config.toml、config.json 或 config.yaml"
-        if [ -f "${box_pid}" ]; then
-          rm -f "${box_pid}"
-          log Info "已移除 PID 文件: ${box_pid}"
-        fi
+      if [ ! -f "${v2fly_config}" ]; then
+        log Error "未找到配置文件：${v2fly_config}"
         exit 1
       else
-        log Info "已找到配置文件 (config.toml, .json, .yaml 之一)"
+        if [[ "${v2fly_config}" == *.yaml ]]; then
+          ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | .port) = '"${tproxy_port}"'' -i --output-format=yaml "${v2fly_config}" >/dev/null 2>&1
+        elif [[ "${v2fly_config}" == *.json ]]; then
+          ${box_dir}/bin/yq '(.inbounds[] | select(.protocol == "dokodemo-door") | select(.tag == "tproxy-in") | .port) = '"${tproxy_port}" -i --output-format=json "${v2fly_config}" >/dev/null 2>&1
+        fi
+        log Info "已定位配置文件：${v2fly_config}"
       fi
       export V2RAY_LOCATION_ASSET="${box_dir}/${bin_name}"
       if ${bin_path} test -d "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
@@ -543,6 +551,7 @@ box_run_bin() {
         PID=$!
         echo -n $PID > "${box_pid}"
       else
+        set_description error
         log Error "$<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
@@ -612,7 +621,7 @@ box_bin_status() {
   log Info "${bin_name} 内存占用: ${bin_rss}, 交换: ${bin_swap}"
 
   # 获取 CPU 使用率
-  cpu=$(ps -p $PID -o %cpu | busybox awk 'NR==2{print $1}' 2> /dev/null)
+  cpu=$(ps -p $PID -o %cpu | busybox awk 'NR==2{print $1}' 2>/dev/null)
 
   cpus_allowed=$(grep Cpus_allowed_list /proc/$PID/status | busybox awk '{ print $2" "$3 }')
   core=$(busybox awk '{print $39}' /proc/$PID/stat 2>/dev/null)
@@ -703,6 +712,12 @@ set_description() {
     idle)
       desc="✨ Box模块已加载，等待服务启动"
       ;;
+    error)
+      # 仅在出现配置错误时使用
+      local current_time
+      current_time=$(date "+%Y-%m-%d %H:%M:%S")
+      desc="⚠️ Box配置错误 | 时间: ${current_time} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
+      ;;
     *)
       desc="💤 Box状态未知"
       ;;
@@ -746,7 +761,7 @@ start_box() {
       echo "$(getprop gsm.sim.operator.alpha) $(getprop gsm.network.type)"
       echo "${box_version}($(getprop ro.product.cpu.abi))"
       echo "━━━━━━━━━━━━━━━━━━"
-    } | tee -a "${box_log}" > /dev/null 2>&1
+    } | tee -a "${box_log}" >/dev/null 2>&1
   fi
 
   # 如果 bin_name 仍在运行则更新 iptables
@@ -849,11 +864,11 @@ stop_box() {
 
 stop_cron() {
   # 使用 pkill 停止 crond
-  if ! busybox pkill -f "busybox crond" > /dev/null 2>&1; then
+  if ! busybox pkill -f "busybox crond" >/dev/null; then
     # 如果 pkill 失败，查找并终止进程
     cronkill=$(busybox pgrep -f "crond -c ${box_run}")
     for cron in ${cronkill[@]}; do
-      kill -15 "${cron}" 2>/dev/null
+      kill -15 "${cron}" >/dev/null 2>&1
     done
   fi
 }
@@ -887,7 +902,7 @@ fi
 
 case "$1" in
   start)
-    stop_box >> /dev/null 2>&1
+    stop_box >/dev/null 2>&1
     if start_box; then
         $scripts_dir/box.tool webroot >/dev/null 2>&1
     fi

@@ -13,10 +13,16 @@ busybox="/data/adb/magisk/busybox"
 [ -f "/data/adb/ksu/bin/busybox" ] && busybox="/data/adb/ksu/bin/busybox"
 [ -f "/data/adb/ap/bin/busybox" ] && busybox="/data/adb/ap/bin/busybox"
 
+wait_for_data_ready() {
+  while [ ! -f "/data/system/packages.xml" ] ; do
+    sleep 1
+  done
+}
+
 refresh_box() {
   if [ -f "/data/adb/box/run/box.pid" ]; then
-    "${scripts_dir}/box.service" stop >> "/dev/null" 2>&1
-    "${scripts_dir}/box.iptables" disable >> "/dev/null" 2>&1
+    "${scripts_dir}/box.service" stop > "/dev/null" 2>&1
+    "${scripts_dir}/box.iptables" disable > "/dev/null" 2>&1
   fi
 }
 
@@ -31,7 +37,7 @@ start_service() {
   fi
   
   if [ ! -f "${moddir}/disable" ]; then
-    "${scripts_dir}/box.service" start >> "/dev/null" 2>&1
+    "${scripts_dir}/box.service" start > "/dev/null" 2>&1
   fi
 }
 
@@ -45,13 +51,13 @@ enable_iptables() {
   done
 
   if [ -n "$PID" ]; then
-    "${scripts_dir}/box.iptables" enable >> "/dev/null" 2>&1
+    "${scripts_dir}/box.iptables" enable > "/dev/null" 2>&1
   fi
 }
 
 net_inotifyd() {
   while [ ! -f /data/misc/net/rt_tables ] ; do
-    sleep 3
+    sleep 1
   done
 
   net_dir="/data/misc/net"
@@ -83,6 +89,7 @@ if [ -f "/data/adb/box/manual" ]; then
 fi
 
 if [ -f "$file_settings" ] && [ -r "$file_settings" ] && [ -s "$file_settings" ]; then
+  wait_for_data_ready
   refresh_box
   start_service
   enable_iptables

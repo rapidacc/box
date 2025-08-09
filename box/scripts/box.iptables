@@ -91,7 +91,7 @@ box_etc() {
 
 bin_alive() {
   local PID=$(<"${box_pid}" 2>/dev/null)
-  if ! kill -0 "$PID" 2>/dev/null; then
+  if ! kill -0 "$PID" >/dev/null; then
     log Error "$(<"${box_run}/${bin_name}.log")"
     log Error "${bin_name} 服务未运行。"
     log Error "请检查 ${bin_name}.log 获取更多信息。"
@@ -130,7 +130,7 @@ disable_ipv6() {
 
   # 新增：彻底阻断 IPv6
   ip -6 rule add unreachable pref "${pref}"
-} >> /dev/null 2>&1
+} >/dev/null 2>&1
 
 ipv6_enable() {
   sysctl -w net.ipv4.ip_forward=1
@@ -147,7 +147,7 @@ ipv6_enable() {
 
   # 新增：阻止所有 IPv6 的 53 端口 UDP 出站流量，防止 IPv6 DNS 泄漏
   $IP6V -A OUTPUT -p udp --destination-port 53 -j DROP
-} >> /dev/null 2>&1
+} >/dev/null 2>&1
 
 intranet=(
   0.0.0.0/8
@@ -243,8 +243,8 @@ tun_forward_ip_rules() {
 
 tun_forward_ip_rules_del() {
   for pref in 5000 5010 5020 5030 5040 5050 6000; do
-    ip -4 rule del pref $pref 2>/dev/null
-    ip -6 rule del pref $pref 2>/dev/null
+    ip -4 rule del pref $pref >/dev/null 2>&1
+    ip -6 rule del pref $pref >/dev/null 2>&1
   done
 }
 
@@ -449,8 +449,8 @@ start_tproxy() {
     ip -6 route add local default dev lo table "${table}"
   fi
 
-  ${iptables} -t mangle -N BOX_EXTERNAL 2>/dev/null
-  ${iptables} -t mangle -F BOX_EXTERNAL 2>/dev/null
+  ${iptables} -t mangle -N BOX_EXTERNAL >/dev/null 2>&1
+  ${iptables} -t mangle -F BOX_EXTERNAL >/dev/null 2>&1
 
   # ${iptables} -t mangle -A BOX_EXTERNAL -m mark --mark ${routing_mark} -j RETURN
 
@@ -465,11 +465,11 @@ start_tproxy() {
       [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_EXTERNAL -p tcp --dport 53 -j TPROXY --on-port ${tproxy_port} --tproxy-mark ${fwmark}
       ${iptables} -t mangle -A BOX_EXTERNAL -p udp --dport 53 -j TPROXY --on-port ${tproxy_port} --tproxy-mark ${fwmark}
   fi
- 
+
   # 跳过已被 TProxy 处理的流量，若默认路由接口有公网 IP，省略这些规则会导致本地流量代理异常，可能拖慢全网
-  [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_EXTERNAL -p tcp -m socket --transparent -j MARK --set-xmark ${fwmark}
-  ${iptables} -t mangle -A BOX_EXTERNAL -p udp -m socket --transparent -j MARK --set-xmark ${fwmark}
-  ${iptables} -t mangle -A BOX_EXTERNAL -m socket -j RETURN
+  # [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_EXTERNAL -p tcp -m socket --transparent -j MARK --set-xmark ${fwmark}
+  # ${iptables} -t mangle -A BOX_EXTERNAL -p udp -m socket --transparent -j MARK --set-xmark ${fwmark}
+  # ${iptables} -t mangle -A BOX_EXTERNAL -m socket -j RETURN
  
   # 跳过内网，兼容性可用 su -c 'zcat /proc/config.gz | grep -i addrtype' 检查
   # ${iptables} -t mangle -A BOX_EXTERNAL -m addrtype --dst-type LOCAL -j RETURN
@@ -719,10 +719,10 @@ cleanup_iptables() {
       stop_redirect
       stop_tproxy
       forward -D
-    } >> /dev/null 2>&1
+    } > /dev/null 2>&1
 
     if [ "${iptables}" = "$IP6V" ]; then
-      ${iptables} -D OUTPUT -p udp --destination-port 53 -j DROP >> /dev/null 2>&1
+      ${iptables} -D OUTPUT -p udp --destination-port 53 -j DROP > /dev/null 2>&1
     fi
   done
 }
@@ -787,7 +787,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
             log Info "iptables 透明代理规则创建完成。"
           else
             log Error "iptables 透明代理规则创建失败。"
-            stop_tproxy >> /dev/null 2>&1
+            stop_tproxy > /dev/null 2>&1
           fi
 
           if [ "${ipv6}" = "true" ]; then
@@ -799,7 +799,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
               log Info "ip6tables 透明代理规则创建完成。"
             else
               log Error "ip6tables 透明代理规则创建失败。"
-              stop_tproxy >> /dev/null 2>&1
+              stop_tproxy > /dev/null 2>&1
             fi
           else
             disable_ipv6
@@ -815,7 +815,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
             log Info "iptables 透明代理规则创建完成。"
           else
             log Error "iptables 透明代理规则创建失败。"
-            stop_redirect >> /dev/null 2>&1
+            stop_redirect > /dev/null 2>&1
           fi
 
           if [ "${ipv6}" = "true" ]; then
@@ -827,7 +827,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
               log Info "ip6tables 透明代理规则创建完成。"
             else
               log Error "ip6tables 透明代理规则创建失败。"
-              stop_redirect >> /dev/null 2>&1
+              stop_redirect > /dev/null 2>&1
             fi
           else
             disable_ipv6
@@ -840,26 +840,26 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
 
           iptables="$IPV"
           probe_tun_device || log Error "未找到 TUN 设备: (${tun_device})"
-          forward -I || forward -D >> /dev/null 2>&1
+          forward -I || forward -D > /dev/null 2>&1
           [ "${tun_forward}" = "enable" ] && log Info "TUN 热点支持已启用。" || log Warning "TUN 热点支持已禁用。"
 
           if start_redirect; then
             log Info "iptables 透明代理规则创建完成。"
           else
             log Error "iptables 透明代理规则创建失败。"
-            stop_redirect >> /dev/null 2>&1
+            stop_redirect > /dev/null 2>&1
           fi
 
           if [ "${ipv6}" = "true" ]; then
             log Debug "启用 IPv6。"
             ipv6_enable
             iptables="$IP6V"
-            forward -I || forward -D >> /dev/null 2>&1
+            forward -I || forward -D > /dev/null 2>&1
             if start_redirect; then
               log Info "ip6tables 透明代理规则创建完成。"
             else
               log Error "ip6tables 透明代理规则创建失败。"
-              stop_redirect >> /dev/null 2>&1
+              stop_redirect > /dev/null 2>&1
             fi
           else
             disable_ipv6
@@ -875,7 +875,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
             log Info "iptables 透明代理规则创建完成。"
           else
             log Error "iptables 透明代理规则创建失败。"
-            stop_redirect >> /dev/null 2>&1
+            stop_redirect > /dev/null 2>&1
           fi
 
           if [ "${ipv6}" = "true" ]; then
@@ -886,7 +886,7 @@ if [[ "${network_mode}" == @(redirect|mixed|tproxy|enhance) ]]; then
               log Info "ip6tables 透明代理规则创建完成。"
             else
               log Error "ip6tables 透明代理规则创建失败。"
-              stop_redirect >> /dev/null 2>&1
+              stop_redirect > /dev/null 2>&1
             fi
           else
             disable_ipv6
@@ -938,7 +938,7 @@ else
         log Info "iptables TUN 规则创建完成。"
       else
         log Error "iptables TUN 规则创建失败。"
-        forward -D >> /dev/null 2>&1
+        forward -D > /dev/null 2>&1
       fi
 
       if [ "${ipv6}" = "true" ]; then
@@ -949,7 +949,7 @@ else
           log Info "ip6tables TUN 规则创建完成。"
         else
           log Error "ip6tables TUN 规则创建失败。"
-          forward -D >> /dev/null 2>&1
+          forward -D > /dev/null 2>&1
         fi
       else
         disable_ipv6

@@ -1,17 +1,6 @@
 #!/system/bin/sh
 
-# 日志文件路径
-LOG_FILE="/data/adb/box/run/tool.log"
-mkdir -p "$(dirname "$LOG_FILE")"
-
-# 保存原始的文件描述符
-exec 3>&1 4>&2
-
-# 将标准输出和标准错误重定向到日志文件，每次运行时覆盖
-exec > "$LOG_FILE" 2>&1
-echo "box.tool 脚本启动于: $(date)"
-echo "执行命令: $0 $@"
-echo "----------------------------------------"
+#
 
 scripts_dir="${0%/*}"
 
@@ -29,22 +18,24 @@ singbox_stable="enable"
 # 这会覆盖上面设置的默认值
 source /data/adb/box/settings.ini
 
-# --- 本地日志函数 ---
-# 覆盖 settings.ini 中的 log 函数，以实现更简洁、统一的日志格式，
-# 并且只输出到 tool.log 文件，避免干扰 runs.log。
-log() {
-    level="$1"
-    shift
-    message="$@"
-    current_time_simple=$(date +"%H:%M:%S")
-    echo "[$current_time_simple] [$level] $message"
-}
-# --- 日志函数结束 ---
+# 使用 settings.ini 中提供的 log()
+
+TOOL_LOG="/data/adb/box/run/tool.log"
+busybox mkdir -p "$(dirname "$TOOL_LOG")"
+box_log="$TOOL_LOG"
 
 rev1="busybox wget --no-check-certificate -qO-"
-if which curl > /dev/null 2>&1; then
+if which curl >/dev/null; then
   rev1="curl --insecure -sL"
 fi
+
+# 启动提示
+divider() {
+  local line="----------------------------------------"
+  [ -n "$box_log" ] && echo "$line" >> "$box_log"
+}
+trap divider EXIT
+log Info "执行命令: $0 $@"
 
 # 更新文件
 upfile() {
@@ -61,7 +52,7 @@ upfile() {
   log Info "开始下载: ${update_url}"
   log Debug "保存到: ${file}"
 
-  if which curl > /dev/null 2>&1; then
+  if which curl >/dev/null; then
     # -sSL: 静默模式但仍然显示错误
     if ! curl -sSL --insecure --user-agent "${user_agent}" -o "${file}" "${update_url}"; then
       log Error "使用 curl 下载失败"
@@ -127,7 +118,7 @@ check() {
       if ${bin_path} -test -confdir "${box_dir}/${bin_name}" > "${box_run}/${bin_name}_report.log" 2>&1; then
         log Info "配置检查通过"
       else
-        echo "$(ls ${box_dir}/${bin_name})"
+        log Debug "$(ls ${box_dir}/${bin_name})"
         log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
@@ -136,7 +127,7 @@ check() {
       if ${bin_path} test -d "${box_dir}/${bin_name}" > "${box_run}/${bin_name}_report.log" 2>&1; then
         log Info "配置检查通过"
       else
-        echo "$(ls ${box_dir}/${bin_name})"
+        log Debug "$(ls ${box_dir}/${bin_name})"
         log Error "$(<"${box_run}/${bin_name}_report.log")" >&2
       fi
       ;;
@@ -156,7 +147,7 @@ reload() {
   secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
 
   curl_command="curl"
-  if ! command -v curl >/dev/null 2>&1; then
+  if ! command -v curl >/dev/null; then
     if [ ! -e "${bin_dir}/curl" ]; then
       log Debug "$bin_dir/curl 文件未找到, 无法重载配置"
       log Debug "开始从 GitHub 下载"
@@ -356,7 +347,7 @@ upsubs() {
                    ${yq} -i '{"proxies": .}' "${mihomo_provide_config}"; then
 
                   if [ "${custom_rules_subs}" = "true" ]; then
-                    if ${yq} '.rules' "${update_file_name}" >/dev/null 2>&1; then
+                    if ${yq} '.rules' "${update_file_name}" >/dev/null; then
                       mkdir -p "$(dirname "${mihomo_provide_rules}")"
                       ${yq} '.rules' "${update_file_name}" > "${mihomo_provide_rules}"
                       ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
@@ -576,7 +567,7 @@ xkernel() {
   case "${core_to_process}" in
     "mihomo"|"mihomo_smart")
       gunzip_command="gunzip"
-      if ! command -v gunzip >/dev/null 2>&1; then
+      if ! command -v gunzip >/dev/null; then
         gunzip_command="busybox gunzip"
       fi
 
@@ -590,7 +581,7 @@ xkernel() {
       ;;
     "sing-box")
       tar_command="tar"
-      if ! command -v tar >/dev/null 2>&1; then
+      if ! command -v tar >/dev/null; then
         tar_command="busybox tar"
       fi
       log Info "正在解压 Sing-Box 核心..."
@@ -614,7 +605,7 @@ xkernel() {
         bin="v2ray"
       fi
       unzip_command="unzip"
-      if ! command -v unzip >/dev/null 2>&1; then
+      if ! command -v unzip >/dev/null; then
         unzip_command="busybox unzip"
       fi
 
@@ -684,7 +675,7 @@ upxui() {
       else
         rm -rf "${box_dir}/${xdashboard}/"*
       fi
-      if command -v unzip >/dev/null 2>&1; then
+      if command -v unzip >/dev/null; then
         unzip_command="unzip"
       else
         unzip_command="busybox unzip"
@@ -722,7 +713,7 @@ cgroup_blkio() {
   fi
 
   local PID=$(<"$pid_file" 2>/dev/null)
-  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
     log Warning "PID 无效或已停止: $PID"
     return 1
   fi
@@ -788,7 +779,7 @@ cgroup_memcg() {
 
   local PID
   PID=$(<"$pid_file" 2>/dev/null)
-  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
     log Warning "PID 无效或已停止: $PID"
     return 1
   fi
@@ -805,8 +796,17 @@ cgroup_memcg() {
   local target="${memcg_path}/${name}"
   mkdir -p "$target"
 
+  hr_limit="$limit B"
+  if [ "$limit" -ge 1073741824 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f GiB", b/1073741824}')"
+  elif [ "$limit" -ge 1048576 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f MiB", b/1048576}')"
+  elif [ "$limit" -ge 1024 ]; then
+    hr_limit="$(busybox awk -v b=$limit 'BEGIN{printf "%.2f KiB", b/1024}')"
+  fi
+
   echo "$limit" > "${target}/memory.limit_in_bytes" \
-    && log Info "已为 $name 设置内存限制: ${limit} 字节"
+    && log Info "已为 $name 设置内存限制: ${hr_limit} (${limit} 字节)"
 
   echo "$PID" > "${target}/cgroup.procs" \
     && log Info "已分配 PID $PID 到 ${target}"
@@ -825,7 +825,7 @@ cgroup_cpuset() {
 
   local PID
   PID=$(<"${pid_file}" 2>/dev/null)
-  if [ -z "$PID" ] || ! kill -0 "$PID" 2>/dev/null; then
+  if [ -z "$PID" ] || ! kill -0 "$PID" >/dev/null; then
     log Warning "来自 ${pid_file} 的 PID $PID 无效或未运行"
     return 1
   fi
@@ -848,7 +848,10 @@ cgroup_cpuset() {
     fi
   fi
 
-  local cpuset_target="${cpuset_path}/top-app"
+  local cpuset_target="${cpuset_path}/foreground"
+  if [ ! -d "${cpuset_target}" ]; then
+    cpuset_target="${cpuset_path}/top-app"
+  fi
   if [ ! -d "${cpuset_target}" ]; then
     cpuset_target="${cpuset_path}/apps"
     [ ! -d "${cpuset_target}" ] && log Warning "cpuset 目标未找到" && return 1
@@ -864,8 +867,6 @@ cgroup_cpuset() {
 }
 
 webroot() {
-  exec 1>&3 2>&4
-  
   ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
   secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
   path_webroot="/data/adb/modules/box_for_root/webroot/index.html"
@@ -904,8 +905,7 @@ webroot() {
   </body>
   </html>' > $path_webroot
   fi
-  
-  exec > "$LOG_FILE" 2>&1
+  log Info "已生成/更新 WebUI 页面: ${path_webroot} → http://${ip_port}/ui/ (内核: ${bin_name})"
 }
 
 bond0() {
