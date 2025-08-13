@@ -8,7 +8,7 @@ scripts_dir="${0%/*}"
 # user agent
 user_agent="box_for_root"
 # 是否使用 ghfast 加速 GitHub 下载
-url_ghproxy="https://ghfast.com"
+url_ghproxy="https://ghfast.top"
 use_ghproxy="false"
 # 启用/禁用下载稳定的 mihomo 内核
 mihomo_stable="enable"
@@ -53,15 +53,15 @@ upfile() {
   log Debug "保存到: ${file}"
 
   if which curl >/dev/null; then
-    # -sSL: 静默模式但仍然显示错误
-    if ! curl -sSL --insecure --user-agent "${user_agent}" -o "${file}" "${update_url}"; then
+    # -L: 跟随重定向, --progress-bar: 显示进度条
+    if ! curl -L --progress-bar --insecure --user-agent "${user_agent}" -o "${file}" "${update_url}"; then
       log Error "使用 curl 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
     fi
   else
-    # -q: 完全静默, 使用 || 判断错误
-    if ! busybox wget -q --no-check-certificate --user-agent "${user_agent}" -O "${file}" "${update_url}"; then
+    # --progress=bar:force: 显示进度条
+    if ! busybox wget --progress=bar:force --no-check-certificate --user-agent "${user_agent}" -O "${file}" "${update_url}"; then
       log Error "使用 wget 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
