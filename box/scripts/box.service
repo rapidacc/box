@@ -9,15 +9,17 @@ find_packages_uid() {
   local uid_log="${box_run}/uid.log"
 
   # --- 1. 初始化，创建覆盖写入的日志文件 ---
-  echo "--- Box UID/GID 查询日志 ---" > "${uid_log}"
-  echo "$(date)" >> "${uid_log}"
-  echo "[Info] 代理模式: ${proxy_mode}" >> "${uid_log}"
-  echo "" >> "${uid_log}"
-  echo "--- 从 package.list.cfg 读取的列表 ---" >> "${uid_log}"
-  echo "[Debug] 统一应用列表: ${packages_list_multiuser[*]}" >> "${uid_log}"
-  echo "[Debug] GID 列表: ${gid_list[*]}" >> "${uid_log}"
-  echo "----------------------------------------" >> "${uid_log}"
-  echo "" >> "${uid_log}"
+  cat > "${uid_log}" <<-EOF
+ --- Box UID/GID 查询日志 ---
+ $(date)
+ [Info] 代理模式: ${proxy_mode}
+
+ --- 从 package.list.cfg 读取的列表 ---
+ [Debug] 统一应用列表: ${packages_list_multiuser[*]}
+ [Debug] GID 列表: ${gid_list[*]}
+ ----------------------------------------
+
+EOF
 
   # 清空最终的 UID 列表文件
   > "${uid_list}"
@@ -35,9 +37,9 @@ find_packages_uid() {
     if [ -n "${base_uid}" ]; then
       local multiuser_uid=$((base_uid + prefix * 100000))
       echo "${multiuser_uid}" >> "${uid_list}"
-      echo "[Info] Success: 用户 ${prefix} 应用: ${package} -> ${multiuser_uid}" >> "${uid_log}"
+      echo "[Info] Success: 用户 \"${prefix}\" 应用: \"${package}\" -> ${multiuser_uid}" >> "${uid_log}"
     else
-      echo "[Warning] Failure: 用户 ${prefix} 应用: ${package} -> 未找到" >> "${uid_log}"
+      echo "[Warning] Failure: 用户 \"${prefix}\" 应用: \"${package}\" -> 未找到" >> "${uid_log}"
     fi
   done
 
@@ -96,7 +98,7 @@ box_check_logs() {
 
 box_bin_alive() {
   local PID=$(<"${box_pid}" 2>/dev/null)
-  if ! kill -0 "$PID" >/dev/null; then
+  if ! kill -0 "$PID" >/dev/null 2>&1; then
     log Error "$<"${box_run}/${bin_name}.log")"
     log Error "${bin_name} 服务未运行。"
     log Error "请检查 ${bin_name}.log 获取详细信息。"
@@ -140,14 +142,14 @@ box_run_crontab() {
 
 box_ownership() {
   # 设置内核目录权限和属主
-  chown -R ${box_user_group} ${box_dir}
-  chmod -R 644 ${box_dir}/${bin_name}
+  chown -R "${box_user_group}" "${box_dir}"
+  chmod -R 644 "${box_dir}/${bin_name}"
 
-  chown ${box_user_group} ${bin_path}
-  chmod 6755 ${bin_path}
+  chown "${box_user_group}" "${bin_path}"
+  chmod 6755 "${bin_path}"
 
-  chmod 0700 ${box_dir}/bin/yq
-  chmod 0700 ${box_dir}/bin/curl
+  chmod 0700 "${box_dir}/bin/yq"
+  chmod 0700 "${box_dir}/bin/curl"
 }
 
 box_permission() {
@@ -157,14 +159,14 @@ box_permission() {
     log Info "使用内核 ${bin_path}。"
   else
     if  [[ "${box_user_group}" != @(root:net_admin|0:3005) ]]; then
-      log Error "不支持的用户组 [ $box_user_group ]"
-      sed -i "s/box_user_group=.*/box_user_group=\"root:net_admin\"/g" ${settings}
+      log Error "不支持的用户组 [ \"${box_user_group}\" ]"
+      sed -i "s/box_user_group=.*/box_user_group=\"root:net_admin\"/g" "${settings}"
       log Debug "已自动切换为 [ root:net_admin ]，请重启 box"
       exit 1
     fi
-    log Error "未检测到内核 [ ${bin_name} ]。"
-    log Error "请下载 [ ${bin_name} ] 内核并放置到 ${bin_dir}/ 目录下。"
-    log Debug "可在终端执行 'su -c /data/adb/box/scripts/box.tool upkernel' 下载内核"
+    log Error "未检测到内核 [ \"${bin_name}\" ]。"
+    log Error "请下载 [ \"${bin_name}\" ] 内核并放置到 \"${bin_dir}/\" 目录下。"
+    log Debug "可在终端执行 'su -c \"${scripts_dir}/box.tool upkernel\"' 下载内核"
     exit 1
   fi
 }
@@ -218,10 +220,10 @@ prepare_singbox() {
 
   # 检查 yq
   yq="yq"
-  if ! command -v yq &>/dev/null; then
-    if [ ! -e "${box_dir}/bin/yq" ]; then
+  if ! command -v yq >/dev/null 2>&1; then
+    if [ ! -x "${box_dir}/bin/yq" ]; then
       log Debug "未找到 yq，开始从 GitHub 下载"
-      ${scripts_dir}/box.tool upyq
+      "${scripts_dir}/box.tool" upyq
     fi
     yq="${box_dir}/bin/yq"
   fi
@@ -594,23 +596,16 @@ box_bin_status() {
     return 1
   fi
 
-  stack=$(if [ "${bin_name}" != "mihomo" ]; then busybox awk -F'"' '/"stack"/{print $4}' "${sing_config}"; else busybox awk '!/^ *#/ && /stack: / { print $2;found=1; exit}' "${mihomo_config}"; fi)
+  stack=$(if [ "${bin_name}" != "mihomo" ]; then find "/data/adb/box/sing-box" -type f -name "*.json" -exec busybox awk -F'"' '/"stack"/{print $4}' {} +; else busybox awk '!/^ *#/ && /stack: / { print $2;found=1; exit}' "${mihomo_config}"; fi)
   TOAST=1 log Info "${bin_name} 服务正在运行"
 
   log Info "代理模式: ${proxy_mode} + 网络模式: ${network_mode} + $(if [[ "${network_mode}" == @(mixed|tun) ]]; then echo "协议栈: ${stack}"; fi)"
 
   # 获取内存使用情况
-  awk_script='
-    /VmRSS/ {rss=$2}
-    /VmSwap/ {swap=$2}
-    /State/ {state=$2" "$3}
-    END {
-      rss_str = rss " KB"; if (rss >= 1024) rss_str = int(rss/1024) " MB";
-      swap_str = swap " KB"; if (swap >= 1024) swap_str = int(swap/1024) " MB";
-      print rss_str, swap_str, state
-    }
-  '
-  read -r bin_rss bin_swap state <<< "$(awk "$awk_script" /proc/$PID/status)"
+  rss=$(grep VmRSS /proc/$PID/status | busybox awk '{ print $2 }')
+  [ "${rss}" -ge 1024 ] && bin_rss="$(expr ${rss} / 1024) MB" || bin_rss="${rss} KB"
+  swap=$(grep VmSwap /proc/$PID/status | busybox awk '{ print $2 }')
+  [ "${swap}" -ge 1024 ] && bin_swap="$(expr ${swap} / 1024) MB" || bin_swap="${swap} KB"
 
   # 获取用户组信息
   user_group=$(stat -c %U:%G /proc/$PID)
@@ -722,7 +717,9 @@ set_description() {
       desc="💤 Box状态未知"
       ;;
   esac
-  sed -Ei "s/^description=.*/description=${desc}/g" "$PROPFILE"
+  local escaped_desc
+  escaped_desc=$(echo "${desc}" | sed -e 's/[&|]/\\&/g')
+  sed -Ei "s|^description=.*|description=${escaped_desc}|g" "$PROPFILE"
 }
 get_dns_mode() {
   dns_mode="未知"
@@ -798,7 +795,7 @@ start_box() {
 
   # busybox 检查
   busybox_code=$(busybox | busybox grep -oE '[0-9.]*' | head -n 1)
-  if [ "$(echo "${busybox_code}" | busybox awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')" -lt "$(echo "1.36.1" | busybox awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')" ]; then
+  if [ -n "${busybox_code}" ] && [ "$(echo "${busybox_code}" | busybox awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')" -lt "$(echo "1.36.1" | busybox awk -F. '{printf "%03d%03d%03d\n", $1, $2, $3}')" ]; then
     log Info "当前 $(which busybox) v${busybox_code}"
     log Warning "请将 busybox 更新到 v1.36.1+"
   else
@@ -835,27 +832,25 @@ start_box() {
 
 stop_box() {
   stop_cron
-  local PID
-  PID=$(cat "${box_pid}" 2>/dev/null)
-
-  if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
-    kill -15 "$PID" >/dev/null 2>&1
-  else
-    # 如果PID文件无效，则回退到pkill
-    for bin in "${bin_list[@]}"; do
-      busybox pkill -15 "${bin}" >/dev/null 2>&1
-    done
-  fi
-
-  # 检查内核是否已停止
-  sleep 0.2
-  if ! busybox pgrep -f "${bin_name}" >/dev/null 2>&1; then
-    rm -f "${box_pid}"
-    log Warning "${bin_name} 已关闭，服务已停止"
-    TOAST=1 log Warning "${bin_name} 已断开连接"
+  for bin in "${bin_list[@]}"; do
+    if busybox pgrep "${bin}" >/dev/null; then
+      if busybox pkill -15 "${bin}" >/dev/null; then
+        :
+      else
+        killall -15 "${bin}" >/dev/null 2>&1 || kill -15 "$(busybox pidof "${bin}")" >/dev/null 2>&1
+      fi
+    fi
+  done
+  sleep 0.5
+  if ! busybox pidof "${bin_name}" >/dev/null; then
+    if [ -f "${box_pid}" ]; then
+      rm -f "${box_pid}"
+    fi
+    log Warning "${bin_name} 已关闭，服务已停止。"
+    TOAST=1 log Warning "${bin_name} 已断开连接。"
     [ -t 1 ] && echo -e "${white}━━━━━━━━━━━━━━━━━━${normal}"
   else
-    log Warning "${bin_name} 未停止；可能仍在关闭过程中或关闭失败"
+    log Warning "${bin_name} 未完全停止，可能正在关闭或关闭失败。"
     force_stop
   fi
 
@@ -863,18 +858,15 @@ stop_box() {
 }
 
 stop_cron() {
-  # 使用 pkill 停止 crond
-  if ! busybox pkill -f "busybox crond" >/dev/null; then
-    # 如果 pkill 失败，查找并终止进程
+  if ! busybox pkill -f "busybox crond" >/dev/null 2>&1; then
     cronkill=$(busybox pgrep -f "crond -c ${box_run}")
-    for cron in ${cronkill[@]}; do
+    for cron in ${cronkill}; do
       kill -15 "${cron}" >/dev/null 2>&1
     done
   fi
 }
 
 force_stop() {
-  # 尝试强制关闭
   log Warning "尝试强制关闭"
   local PID
   PID=$(cat "${box_pid}" 2>/dev/null)
@@ -940,7 +932,7 @@ case "$1" in
     stop_cron
     ;;
   *)
-    echo "${red}$0 $1 未找到${normal}"
-    echo "${yellow}用法${normal}: ${green}$0${normal} {${yellow}start|stop|restart|status|cron|kcron${normal}}"
+    echo "${red}$0 '$1' 未找到${normal}" >&2
+    echo "${yellow}用法${normal}: ${green}$0${normal} {${yellow}start|stop|restart|status|cron|kcron${normal}}" >&2
     ;;
 esac

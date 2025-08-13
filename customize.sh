@@ -49,12 +49,10 @@ fi
 
 ui_print "- 创建目录"
 mkdir -p /data/adb/box/ /data/adb/box/run/ /data/adb/box/bin/
-mkdir -p $MODPATH/system/bin
 
 ui_print "- 提取 uninstall.sh 和 box_service.sh"
 unzip -j -o "$ZIPFILE" 'uninstall.sh' -d "$MODPATH" >&2
 unzip -j -o "$ZIPFILE" 'box_service.sh' -d "${service_dir}" >&2
-unzip -j -o "$ZIPFILE" 'sbfr' -d "$MODPATH/system/bin" >&2
 
 ui_print "- 设置权限"
 set_perm_recursive $MODPATH 0 0 0755 0644
@@ -62,7 +60,6 @@ set_perm_recursive /data/adb/box/ 0 3005 0755 0644
 set_perm_recursive /data/adb/box/scripts/ 0 3005 0755 0700
 set_perm ${service_dir}/box_service.sh 0 0 0755
 set_perm $MODPATH/uninstall.sh 0 0 0755
-set_perm $MODPATH/system/bin/sbfr 0 0 0755
 chmod ugo+x ${service_dir}/box_service.sh $MODPATH/uninstall.sh /data/adb/box/scripts/*
 
 KEY_LISTENER_PID=""
@@ -153,11 +150,11 @@ ui_print "==========================================================="
 
 if handle_choice "是否需要下载内核或数据文件？" "是，进行下载" "否，全部跳过"; then
 
-    if handle_choice "是否使用 'gh-proxy.com' 镜像加速接下来的下载？" "使用加速" "直接下载"; then
-        ui_print "- 已启用 ghproxy 加速。"
+    if handle_choice "是否使用 'ghfast.com' 镜像加速接下来的下载？" "使用加速" "直接下载"; then
+        ui_print "- 已启用 ghfast 加速。"
         sed -i 's/use_ghproxy=.*/use_ghproxy="true"/' /data/adb/box/settings.ini
     else
-        ui_print "- 已禁用 ghproxy 加速。"
+        ui_print "- 已禁用 ghfast 加速。"
         sed -i 's/use_ghproxy=.*/use_ghproxy="false"/' /data/adb/box/settings.ini
     fi
 
@@ -249,6 +246,23 @@ if [ "${backup_box}" = "true" ]; then
   ui_print " "
   ui_print "- 正在恢复用户配置和数据..."
 
+  if [ -f "${temp_dir}/settings.ini" ] && [ -f "/data/adb/box/settings.ini" ]; then
+    ui_print "  - 检测到旧的 settings.ini，尝试应用用户修改..."
+    
+    mv /data/adb/box/settings.ini /data/adb/box/settings.ini.new
+    
+    grep -E '^[a-zA-Z0-9_]+=' "${temp_dir}/settings.ini" | while IFS='=' read -r key value; do
+      if grep -q -E "^${key}=" "/data/adb/box/settings.ini.new"; then
+        sed -i "s#^${key}=.*#${key}=${value}#" "/data/adb/box/settings.ini.new"
+      fi
+    done
+    
+    mv /data/adb/box/settings.ini.new /data/adb/box/settings.ini
+    ui_print "  - 用户自定义设置已合并至新版 settings.ini"
+  elif [ -f "${temp_dir}/settings.ini" ]; then
+    cp -f "${temp_dir}/settings.ini" "/data/adb/box/settings.ini"
+  fi
+
   restore_config_dir() {
     config_dir="$1"
     if [ -d "${temp_dir}/${config_dir}" ]; then
@@ -300,6 +314,6 @@ fi
 unzip -o "$ZIPFILE" 'webroot/*' -d "$MODPATH" >&2
 
 ui_print "- 清理残留文件"
-rm -rf /data/adb/box/bin/.bin $MODPATH/box $MODPATH/sbfr $MODPATH/box_service.sh
+rm -rf /data/adb/box/bin/.bin $MODPATH/box $MODPATH/box_service.sh
 
 ui_print "- 安装完成，请重启设备。"

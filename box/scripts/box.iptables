@@ -326,17 +326,14 @@ start_redirect() {
     ${iptables} -t nat -A BOX_LOCAL -j LOCAL_IP_V4
 
     # 对非环回接口的所有TCP流量进行重定向，避免硬编码接口名称
-    ${iptables} -t nat -A BOX_EXTERNAL -p tcp ! -i lo -j REDIRECT --to-ports "${redir_port}"
+    ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i lo -j REDIRECT --to-ports "${redir_port}"
 
     if [ "${ap_list}" != "" ]; then
         [ ${network_mode} = "enhance" ] || log Info "${ap_list[*]} 透明代理。"
     fi
 
     ${iptables} -t nat -I PREROUTING -j BOX_EXTERNAL
-    # 优先放行代理应用本身，防止回环
     ${iptables} -t nat -I BOX_LOCAL -m owner --uid-owner "${box_user}" --gid-owner "${box_group}" -j RETURN
-    # 其次放行所有到 lo 接口的流量
-    ${iptables} -t nat -I BOX_LOCAL -o lo -j RETURN
 
     if [ "${ignore_out_list}" != "" ]; then
       for ignore in "${ignore_out_list[@]}"; do
@@ -349,48 +346,44 @@ start_redirect() {
   if [ "${iptables}" = "$IPV" ]; then
     case "${proxy_mode}" in
       blacklist|black)
-        # 优先添加 RETURN 规则，确保它们在全局规则之前
-        while read -r appid; do
-          ${iptables} -t nat -A BOX_LOCAL -m owner --uid-owner "${appid}" -j RETURN
-        done < "${uid_list}"
-        
-        if [ -n "${gid_list[*]}" ] ; then
-          for gid in ${gid_list[@]} ; do
-            ${iptables} -t nat -A BOX_LOCAL -m owner --gid-owner "${gid}" -j RETURN
-          done
-        fi
-
-        # 根据列表内容生成日志
-        if [ -s "${uid_list}" ] || [ -n "${gid_list[*]}" ]; then
-            [ ${network_mode} = "enhance" ] || log Info "代理模式: ${proxy_mode} (${packages_list[*]}) GID (${gid_list[*]}) 不透明代理。"
-        else
-            [ ${network_mode} = "enhance" ] || log Info "所有应用透明代理。"
-        fi
-
-        # 最后添加全局代理规则
-        ${iptables} -t nat -A BOX_LOCAL -p tcp -j REDIRECT --to-ports "${redir_port}"
-        ;;
-      whitelist|white)
-        if [ ! -s "${uid_list}" ] && [ -z "${gid_list[*]}" ] ; then
-          # 列表为空，则代理所有应用
+        if [ -z "$(cat "${uid_list}")" ] ; then
           ${iptables} -t nat -A BOX_LOCAL -p tcp -j REDIRECT --to-ports "${redir_port}"
           [ ${network_mode} = "enhance" ] || log Info "所有应用透明代理。"
         else
-          # 代理列表中的 UID 和 GID
+          while read -r appid; do
+            ${iptables} -t nat -A BOX_LOCAL -m owner --uid-owner "${appid}" -j RETURN
+          done < "${uid_list}"
+          ${iptables} -t nat -A BOX_LOCAL -p tcp -j REDIRECT --to-ports "${redir_port}"
+          [ ${network_mode} = "enhance" ] || log Info "代理模式: ${proxy_mode} (${packages_list[*]}) 不透明代理。"
+        fi
+
+        if [ "${gid_list}" != "" ] ; then
+          for gid in ${gid_list[@]} ; do
+            ${iptables} -t nat -A BOX_LOCAL -m owner --gid-owner ${gid} -j RETURN
+          done
+          [ ${network_mode} = "enhance" ] || {
+            [ "${iptables}" = "$IPV" ] &&  log Info "代理模式: ${proxy_mode}, GID (${gid_list[*]}) 不透明代理。"
+          }
+        fi
+        ;;
+      whitelist|white)
+        if [ -z "$(cat "${uid_list}")" ] ; then
+          ${iptables} -t nat -A BOX_LOCAL -p tcp -j REDIRECT --to-ports "${redir_port}"
+          [ ${network_mode} = "enhance" ] || log Info "所有应用透明代理。"
+        else
           while read -r appid; do
             ${iptables} -t nat -A BOX_LOCAL -p tcp -m owner --uid-owner "${appid}" -j REDIRECT --to-ports "${redir_port}"
           done < "${uid_list}"
-          
-          if [ -n "${gid_list[*]}" ] ; then
-            for gid in ${gid_list[@]} ; do
-              ${iptables} -t nat -A BOX_LOCAL -p tcp -m owner --gid-owner "${gid}" -j REDIRECT --to-ports "${redir_port}"
-            done
-          fi
-
-          # 同时代理 root 等特殊 UID
           ${iptables} -t nat -A BOX_LOCAL -p tcp -m owner --uid-owner 0 -j REDIRECT --to-ports "${redir_port}"
           ${iptables} -t nat -A BOX_LOCAL -p tcp -m owner --uid-owner 1052 -j REDIRECT --to-ports "${redir_port}"
-          [ ${network_mode} = "enhance" ] || log Info "代理模式: ${proxy_mode} (${packages_list[*]}) GID (${gid_list[*]}) 透明代理。"
+          [ ${network_mode} = "enhance" ] || log Info "代理模式: ${proxy_mode} (${packages_list[*]}) 透明代理。"
+        fi
+
+        if [ "${gid_list}" != "" ] ; then
+          for gid in ${gid_list[@]} ; do
+            ${iptables} -t nat -A BOX_LOCAL -p tcp -m owner --gid-owner ${gid} -j REDIRECT --to-ports ${redir_port}
+          done
+          [ ${network_mode} = "enhance" ] || [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode}, GID (${gid_list[*]}) 透明代理。"
         fi
         ;;
       *)
@@ -429,14 +422,12 @@ stop_redirect() {
   if [ "${iptables}" = "$IPV" ]; then
     # ${iptables} -t nat -D BOX_EXTERNAL -d "${fake_ip_range}" -p icmp -j DNAT --to-destination 127.0.0.1
     # ${iptables} -t nat -D BOX_LOCAL -d "${fake_ip_range}" -p icmp -j DNAT --to-destination 127.0.0.1
-    ${iptables} -t nat -D PREROUTING -j BOX_EXTERNAL 2>/dev/null
-    ${iptables} -t nat -D OUTPUT -j BOX_LOCAL 2>/dev/null
-    ${iptables} -t nat -F BOX_EXTERNAL 2>/dev/null
-    ${iptables} -t nat -X BOX_EXTERNAL 2>/dev/null
-    ${iptables} -t nat -F BOX_LOCAL 2>/dev/null
-    ${iptables} -t nat -X BOX_LOCAL 2>/dev/null
-    ${iptables} -t nat -F LOCAL_IP_V4 2>/dev/null
-    ${iptables} -t nat -X LOCAL_IP_V4 2>/dev/null
+    ${iptables} -t nat -F BOX_EXTERNAL
+    ${iptables} -t nat -X BOX_EXTERNAL
+    ${iptables} -t nat -F BOX_LOCAL
+    ${iptables} -t nat -X BOX_LOCAL
+    ${iptables} -t nat -F LOCAL_IP_V4
+    ${iptables} -t nat -X LOCAL_IP_V4
   fi
 }
 
@@ -541,54 +532,49 @@ start_tproxy() {
 
   case "${proxy_mode}" in
     blacklist|black)
-      # 优先添加 RETURN 规则，确保它们在全局规则之前
-      while read -r appid; do
-        ${iptables} -t mangle -A BOX_LOCAL -m owner --uid-owner "${appid}" -j RETURN
-      done < "${uid_list}"
-
-      if [ -n "${gid_list[*]}" ] ; then
-        for gid in ${gid_list[@]} ; do
-          ${iptables} -t mangle -A BOX_LOCAL -m owner --gid-owner "${gid}" -j RETURN
-        done
-      fi
-
-      # 根据列表内容生成日志
-      if [ -s "${uid_list}" ] || [ -n "${gid_list[*]}" ]; then
-          [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode}, (${packages_list[*]}) GID (${gid_list[*]}) 不透明代理。"
-      else
-          [ "${iptables}" = "$IPV" ] && log Info "所有应用透明代理。"
-      fi
-
-      # 最后添加全局代理规则
-      [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -j MARK --set-xmark "${fwmark}"
-      ${iptables} -t mangle -A BOX_LOCAL -p udp -j MARK --set-xmark "${fwmark}"
-      ;;
-    whitelist|white)
-      if [ ! -s "${uid_list}" ] && [ -z "${gid_list[*]}" ] ; then
-        # 列表为空，则代理所有应用
+      if [ -z "$(cat "${uid_list}")" ] ; then
         [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -j MARK --set-xmark "${fwmark}"
         ${iptables} -t mangle -A BOX_LOCAL -p udp -j MARK --set-xmark "${fwmark}"
         [ "${iptables}" = "$IPV" ] && log Info "所有应用透明代理。"
       else
-        # 代理列表中的 UID 和 GID
+        while read -r appid; do
+          ${iptables} -t mangle -A BOX_LOCAL -m owner --uid-owner "${appid}" -j RETURN
+        done < "${uid_list}"
+        [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -j MARK --set-xmark "${fwmark}"
+        ${iptables} -t mangle -A BOX_LOCAL -p udp -j MARK --set-xmark "${fwmark}"
+        [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode} (${packages_list[*]}) 不透明代理。"
+      fi
+
+      if [ "${gid_list}" != "" ] ; then
+        for gid in ${gid_list[@]} ; do
+          ${iptables} -t mangle -A BOX_LOCAL -m owner --gid-owner ${gid} -j RETURN
+        done
+        [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode}, GID (${gid_list[*]}) 不透明代理。"
+      fi
+      ;;
+    whitelist|white)
+      if [ -z "$(cat "${uid_list}")" ] ; then
+        [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -j MARK --set-xmark "${fwmark}"
+        ${iptables} -t mangle -A BOX_LOCAL -p udp -j MARK --set-xmark "${fwmark}"
+        [ "${iptables}" = "$IPV" ] && log Info "所有应用透明代理。"
+      else
         while read -r appid; do
           [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -m owner --uid-owner "${appid}" -j MARK --set-xmark "${fwmark}"
           ${iptables} -t mangle -A BOX_LOCAL -p udp -m owner --uid-owner "${appid}" -j MARK --set-xmark "${fwmark}"
         done < "${uid_list}"
-
-        if [ -n "${gid_list[*]}" ] ; then
-          for gid in ${gid_list[@]} ; do
-            [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -m owner --gid-owner "${gid}" -j MARK --set-xmark "${fwmark}"
-            ${iptables} -t mangle -A BOX_LOCAL -p udp -m owner --gid-owner "${gid}" -j MARK --set-xmark "${fwmark}"
-          done
-        fi
-
-        # 同时代理 root 等特殊 UID
         [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -m owner --uid-owner 0 -j MARK --set-xmark "${fwmark}"
         ${iptables} -t mangle -A BOX_LOCAL -p udp -m owner --uid-owner 0 -j MARK --set-xmark "${fwmark}"
         [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -m owner --uid-owner 1052 -j MARK --set-xmark "${fwmark}"
         ${iptables} -t mangle -A BOX_LOCAL -p udp -m owner --uid-owner 1052 -j MARK --set-xmark "${fwmark}"
-        [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode}, (${packages_list[*]}) GID (${gid_list[*]}) 透明代理。"
+        [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode} (${packages_list[*]}) 透明代理。"
+      fi
+
+      if [ "${gid_list}" != "" ] ; then
+        for gid in ${gid_list[@]} ; do
+          [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_LOCAL -p tcp -m owner --gid-owner ${gid} -j MARK --set-xmark "${fwmark}"
+          ${iptables} -t mangle -A BOX_LOCAL -p udp -m owner --gid-owner ${gid} -j MARK --set-xmark "${fwmark}"
+        done
+        [ "${iptables}" = "$IPV" ] && log Info "代理模式: ${proxy_mode}, GID (${gid_list[*]}) 透明代理。"
       fi
       ;;
     *)

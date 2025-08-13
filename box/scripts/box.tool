@@ -7,8 +7,8 @@ scripts_dir="${0%/*}"
 # --- 默认变量 ---
 # user agent
 user_agent="box_for_root"
-# 是否使用 ghproxy 加速 GitHub 下载
-url_ghproxy="https://gh-proxy.com"
+# 是否使用 ghfast 加速 GitHub 下载
+url_ghproxy="https://ghfast.com"
 use_ghproxy="false"
 # 启用/禁用下载稳定的 mihomo 内核
 mihomo_stable="enable"
@@ -317,60 +317,63 @@ upgeox_all() {
 
 # 检查并更新订阅
 upsubs() {
-  enhanced=false
-  update_file_name="${mihomo_config}"
-  if [ "${renew}" != "true" ]; then
-    yq="yq"
-    if ! command -v yq &>/dev/null; then
-      if [ ! -e "${box_dir}/bin/yq" ]; then
-        log Debug "yq 文件未找到, 开始从 GitHub 下载"
-        ${scripts_dir}/box.tool upyq
-      fi
-      yq="${box_dir}/bin/yq"
+  yq="yq"
+  if ! command -v yq &>/dev/null; then
+    if [ ! -e "${box_dir}/bin/yq" ]; then
+      log Debug "yq 文件未找到, 开始从 GitHub 下载"
+      ${scripts_dir}/box.tool upyq
     fi
-    enhanced=true
-    update_file_name="${update_file_name}.subscription"
+    yq="${box_dir}/bin/yq"
   fi
-
   case "${bin_name}" in
     "mihomo")
+      enhanced=false
+      update_file_name="${mihomo_config}"
+      if [ "${renew}" != "true" ]; then
+        enhanced=true
+        update_file_name="${update_file_name}.subscription"
+      fi
+      # 订阅 clash
       if [ -n "${subscription_url_mihomo}" ]; then
         if [ "${update_subscription}" = "true" ]; then
-          log Info "每日更新订阅"
+          log Info "${bin_name} 每日更新订阅 → $(date)"
           log Debug "正在下载 ${update_file_name}"
           if upfile "${update_file_name}" "${subscription_url_mihomo}"; then
             log Info "${update_file_name} 已保存"
+            # 如果存在 yq 命令，则从 yml 中提取代理信息并输出到 clash_provide_config 文件
             if [ "${enhanced}" = "true" ]; then
+              # 确保文件夹存在
+              mkdir -p "$(dirname "${mihomo_provide_config}")"
+              touch "${mihomo_provide_config}"
               if ${yq} 'has("proxies")' "${update_file_name}" | grep -q "true"; then
-                mkdir -p "$(dirname "${mihomo_provide_config}")"
-                if ${yq} '.proxies' "${update_file_name}" > "${mihomo_provide_config}" && \
-                   ${yq} -i '{"proxies": .}' "${mihomo_provide_config}"; then
-
-                  if [ "${custom_rules_subs}" = "true" ]; then
-                    if ${yq} '.rules' "${update_file_name}" >/dev/null; then
-                      mkdir -p "$(dirname "${mihomo_provide_rules}")"
-                      ${yq} '.rules' "${update_file_name}" > "${mihomo_provide_rules}"
-                      ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
-                      ${yq} -i 'del(.rules)' "${mihomo_config}"
-                      cat "${mihomo_provide_rules}" >> "${mihomo_config}"
-                    fi
+                ${yq} '.proxies' "${update_file_name}" >/dev/null 2>&1
+                ${yq} '.proxies' "${update_file_name}" > "${mihomo_provide_config}"
+                ${yq} -i '{"proxies": .}' "${mihomo_provide_config}"
+                if [ "${custom_rules_subs}" = "true" ]; then
+                  if ${yq} '.rules' "${update_file_name}" >/dev/null; then
+                    ${yq} '.rules' "${update_file_name}" > "${mihomo_provide_rules}"
+                    ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
+                    ${yq} -i 'del(.rules)' "${mihomo_config}"
+                    cat "${mihomo_provide_rules}" >> "${mihomo_config}"
                   fi
-
-                  log Info "订阅成功"
-                  log Info "更新订阅于 $(date +"%F %R")"
-                  rm -f "${update_file_name}.bak" 2>/dev/null
-                  rm -f "${update_file_name}"
-                else
-                  log Error "从 ${update_file_name} 提取 'proxies' 失败"
-                  return 1
+                fi
+                log Info "订阅成功"
+                log Info "更新订阅于 $(date +"%F %R")"
+                if [ -f "${update_file_name}.bak" ]; then
+                  rm "${update_file_name}.bak"
                 fi
               elif ${yq} '.. | select(tag == "!!str")' "${update_file_name}" | grep -qE "vless://|vmess://|ss://|hysteria://|trojan://"; then
-                mkdir -p "$(dirname "${mihomo_provide_config}")"
                 mv "${update_file_name}" "${mihomo_provide_config}"
               else
                 log Error "${update_file_name} 更新订阅失败"
                 return 1
               fi
+            else
+              if [ -f "${box_pid}" ]; then
+                kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
+                $scripts_dir/box.service restart 2>/dev/null
+              fi
+              exit 1
             fi
             return 0
           else
@@ -378,7 +381,7 @@ upsubs() {
             return 1
           fi
         else
-          log Warning "更新订阅: $update_subscription"
+          log Warning "更新订阅已禁用: $update_subscription"
           return 1
         fi
       else
@@ -386,7 +389,34 @@ upsubs() {
         return 0
       fi
       ;;
-    "xray"|"v2fly"|"sing-box"|"hysteria")
+    "sing-box")
+      # 订阅 sing-box
+      update_file_name="${sing_config}"
+      if [ -n "${subscription_url_singbox}" ]; then
+        if [ "${update_subscription}" = "true" ]; then
+          log Info "${bin_name} 每日更新订阅 → $(date)"
+          log Debug "正在下载 ${update_file_name}"
+          if upfile "${update_file_name}" "${subscription_url_singbox}"; then
+            log Info "${update_file_name} 已保存"
+            if [ -f "${box_pid}" ]; then
+              kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
+              $scripts_dir/box.service restart 2>/dev/null
+            fi
+            exit 1
+          else
+            log Error "更新订阅失败"
+            return 1
+          fi
+        else
+          log Warning "更新订阅已禁用: $update_subscription"
+          return 1
+        fi
+      else
+        log Warning "${bin_name} 订阅链接为空..."
+        return 1
+      fi
+      ;;
+    "xray"|"v2fly"|"hysteria")
       log Warning "${bin_name} 不支持订阅功能.."
       return 1
       ;;
