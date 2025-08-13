@@ -99,7 +99,7 @@ box_check_logs() {
 box_bin_alive() {
   local PID=$(<"${box_pid}" 2>/dev/null)
   if ! kill -0 "$PID" >/dev/null 2>&1; then
-    log Error "$<"${box_run}/${bin_name}.log")"
+    log Error "$(<"${box_run}/${bin_name}.log")"
     log Error "${bin_name} 服务未运行。"
     log Error "请检查 ${bin_name}.log 获取详细信息。"
     log Error "清理无效 pid $PID"
@@ -167,6 +167,7 @@ box_permission() {
     log Error "未检测到内核 [ \"${bin_name}\" ]。"
     log Error "请下载 [ \"${bin_name}\" ] 内核并放置到 \"${bin_dir}/\" 目录下。"
     log Debug "可在终端执行 'su -c \"${scripts_dir}/box.tool upkernel\"' 下载内核"
+    set_description error "内核不存在"
     exit 1
   fi
 }
@@ -174,6 +175,7 @@ box_permission() {
 box_check_bin() {
   if [ ! -x "${bin_path}" ]; then
     log Error "${bin_path} 不可执行。"
+    set_description error "内核不可执行"
     exit 1
   fi
 
@@ -182,12 +184,14 @@ box_check_bin() {
     mihomo)
       version_output=$("${bin_path}" -v 2>/dev/null) || {
         log Error "${bin_name} 版本信息获取失败。"
+        set_description error "内核损坏"
         exit 1
         }
       ;;
     *)
       version_output=$("${bin_path}" version 2>/dev/null) || {
         log Error "${bin_name} 版本信息获取失败。"
+        set_description error "内核损坏"
         exit 1
         }
       ;;
@@ -213,6 +217,7 @@ prepare_singbox() {
   # 检查配置文件
   if ! [ -f "${sing_config}" ]; then
     log Error "未找到配置文件 ${sing_config}"
+    set_description error "配置文件不存在"
     exit 1
   else
     log Info "检测到配置 ${sing_config}"
@@ -315,8 +320,9 @@ prepare_singbox() {
       fi
     fi
   else
-    log Error "$<"${box_run}/${bin_name}.log")"
+    log Error "$(<"${box_run}/${bin_name}.log")"
     log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
+    set_description error
     exit 1
   fi
 }
@@ -325,6 +331,7 @@ prepare_mihomo() {
   # 检查配置文件
   if ! [ -f "${mihomo_config}" ]; then
     log Error "未找到配置文件 ${mihomo_config}"
+    set_description error "配置文件不存在"
     exit 1
   else
     log Info "检测到配置 ${mihomo_config}"
@@ -485,7 +492,7 @@ box_run_bin() {
         echo -n $PID > "${box_pid}"
       else
         set_description error
-        log Error "$<"${box_run}/${bin_name}.log")"
+        log Error "$(<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
       fi
@@ -500,7 +507,7 @@ box_run_bin() {
         echo -n $PID > "${box_pid}"
       else
         set_description error
-        log Error "$<"${box_run}/${bin_name}.log")"
+        log Error "$(<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
       fi
@@ -511,6 +518,7 @@ box_run_bin() {
       fi
       if [ ! -f "${xray_config}" ]; then
         log Error "未找到配置文件：${xray_config}"
+        set_description error "配置文件不存在"
         exit 1
       else
         if [[ "${xray_config}" == *.yaml ]]; then
@@ -527,7 +535,7 @@ box_run_bin() {
         echo -n $PID > "${box_pid}"
       else
         set_description error
-        log Error "$<"${box_run}/${bin_name}.log")"
+        log Error "$(<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
       fi
@@ -538,6 +546,7 @@ box_run_bin() {
       fi
       if [ ! -f "${v2fly_config}" ]; then
         log Error "未找到配置文件：${v2fly_config}"
+        set_description error "配置文件不存在"
         exit 1
       else
         if [[ "${v2fly_config}" == *.yaml ]]; then
@@ -554,7 +563,7 @@ box_run_bin() {
         echo -n $PID > "${box_pid}"
       else
         set_description error
-        log Error "$<"${box_run}/${bin_name}.log")"
+        log Error "$(<"${box_run}/${bin_name}.log")"
         log Error "配置失败，请检查 ${box_run}/${bin_name}.log 文件。"
         exit 1
       fi
@@ -666,6 +675,7 @@ box_bin_status() {
 # ========== 新增 set_description 函数 ===========
 set_description() {
   local status="$1" # running, stopped, idle
+  local error_msg="$2"
   local desc=""
   local ipv6_info=""
   local wifissid_str=""
@@ -711,15 +721,16 @@ set_description() {
       # 仅在出现配置错误时使用
       local current_time
       current_time=$(date "+%Y-%m-%d %H:%M:%S")
-      desc="⚠️ Box配置错误 | 时间: ${current_time} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
+      [ -z "${error_msg}" ] && error_msg="配置错误"
+      desc="⚠️ Box ${error_msg} | 时间: ${current_time} | 内核: ${bin_name} | 详情见日志: ${box_run}/${bin_name}.log"
       ;;
     *)
       desc="💤 Box状态未知"
       ;;
   esac
   local escaped_desc
-  escaped_desc=$(echo "${desc}" | sed -e 's/[&|]/\\&/g')
-  sed -Ei "s|^description=.*|description=${escaped_desc}|g" "$PROPFILE"
+  escaped_desc=$(echo "${desc}" | sed -e 's/[&|#]/\\&/g')
+  sed -Ei "s#^description=.*#description=${escaped_desc}#g" "$PROPFILE"
 }
 get_dns_mode() {
   dns_mode="未知"
