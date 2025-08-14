@@ -38,7 +38,7 @@ ui_print "- 正在安装 Box for Magisk/KernelSU/APatch"
 unzip -o "$ZIPFILE" -x 'META-INF/*' -x 'webroot/*' -d "$MODPATH" >&2
 if [ -d "/data/adb/box" ]; then
   ui_print "- 备份现有 box 数据"
-  temp_bak=$(mktemp -d "/data/adb/box/box.XXXXXXXXXX")
+  temp_bak=$(mktemp -d -p "/data/adb/box" box.XXXXXXXXXX)
   temp_dir="${temp_bak}"
   mv /data/adb/box/* "${temp_dir}/"
   mv "$MODPATH/box/"* /data/adb/box/
@@ -69,7 +69,7 @@ start_key_listener() {
     if [ -n "$KEY_LISTENER_PID" ] && kill -0 "$KEY_LISTENER_PID" 2>/dev/null; then
         return
     fi
-    KEY_FIFO=$(mktemp -u)
+    KEY_FIFO=$(mktemp -u -p /dev/tmp)
     mkfifo "$KEY_FIFO" || exit 1
     getevent -ql > "$KEY_FIFO" &
     KEY_LISTENER_PID=$!
