@@ -71,7 +71,6 @@ start_key_listener() {
     fi
     KEY_FIFO=$(mktemp -u)
     mkfifo "$KEY_FIFO" || exit 1
-    timeout 0.1 getevent -c 9999 > /dev/null 2>&1
     getevent -ql > "$KEY_FIFO" &
     KEY_LISTENER_PID=$!
 }
@@ -88,35 +87,13 @@ stop_key_listener() {
 }
 
 volume_key_detection() {
-    if [ -z "$KEY_LISTENER_PID" ] || ! kill -0 "$KEY_LISTENER_PID" 2>/dev/null; then
-        ui_print "! 按键监听器未运行，尝试重启..."
-        start_key_listener
-        sleep 0.5
-    fi
-
-    local retval=1
-    local START_TIME=$(date +%s)
-    local choice=""
-
-    while [ -z "$choice" ]; do
-        local NOW_TIME=$(date +%s)
-        if [ $((NOW_TIME - START_TIME)) -gt 9 ]; then
-            ui_print "  => 10秒内无输入，自动选择“取消”。"
-            retval=1
-            break
+    while read -r line; do
+        if echo "$line" | grep -Eiq "(KEY_)?VOLUME ?UP|KEYCODE_VOLUME_UP" && echo "$line" | grep -Eiq "DOWN|PRESS"; then
+            return 0
+        elif echo "$line" | grep -Eiq "(KEY_)?VOLUME ?DOWN|KEYCODE_VOLUME_DOWN" && echo "$line" | grep -Eiq "DOWN|PRESS"; then
+            return 1
         fi
-
-        if read -r -t 1 line <"$KEY_FIFO"; then
-            if echo "$line" | grep -q "KEY_VOLUMEUP.*DOWN"; then
-                choice="UP"
-                retval=0
-            elif echo "$line" | grep -q "KEY_VOLUMEDOWN.*DOWN"; then
-                choice="DOWN"
-                retval=1
-            fi
-        fi
-    done
-    return $retval
+    done < "$KEY_FIFO"
 }
 
 handle_choice() {
@@ -129,7 +106,9 @@ handle_choice() {
     ui_print "- ${question}"
     ui_print "- [ 音量加(+) ]: ${choice_yes}"
     ui_print "- [ 音量减(-) ]: ${choice_no}"
-    
+
+    timeout 0.1 getevent -c 1 >/dev/null 2>&1
+
     start_key_listener
     if volume_key_detection; then
         ui_print "  => 您选择了: ${choice_yes}"
@@ -158,9 +137,6 @@ if handle_choice "是否需要下载内核或数据文件？" "是，进行下�
         sed -i 's/use_ghproxy=.*/use_ghproxy="false"/' /data/adb/box/settings.ini
     fi
 
-    DOWNLOAD_GEOX=false
-    DOWNLOAD_UTILS=false
-    CORES_TO_DOWNLOAD=""
     COMPONENTS_TO_DOWNLOAD=""
 
     if handle_choice "是否需要自定义下载内容？" "自定义" "一键下载所有组件"; then
