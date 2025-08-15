@@ -1,10 +1,7 @@
 #!/system/bin/sh
 
-#
-
 scripts_dir="${0%/*}"
 
-# --- 默认变量 ---
 # user agent
 user_agent="box_for_root"
 # 是否使用 ghfast 加速 GitHub 下载
@@ -14,7 +11,6 @@ use_ghproxy="false"
 mihomo_stable="enable"
 singbox_stable="enable"
 
-# --- 加载用户配置 ---
 # 这会覆盖上面设置的默认值
 source /data/adb/box/settings.ini
 
@@ -39,9 +35,19 @@ log Info "执行命令: $0 $@"
 
 # 更新文件
 upfile() {
-  file="$1"
-  update_url="$2"
-  file_bak="${file}.bak"
+  local file="$1"
+  local update_url="$2"
+  local custom_ua="$3" # 接收自定义 User-Agent
+  local current_ua
+
+  # 如果提供了自定义 UA, 则使用它; 否则使用全局默认值
+  if [ -n "${custom_ua}" ]; then
+    current_ua="${custom_ua}"
+  else
+    current_ua="${user_agent}"
+  fi
+
+  local file_bak="${file}.bak"
   [ -f "${file}" ] && mv "${file}" "${file_bak}"
 
   # 使用 ghproxy
@@ -51,17 +57,18 @@ upfile() {
   
   log Info "开始下载: ${update_url}"
   log Debug "保存到: ${file}"
+  log Debug "使用 User-Agent: ${current_ua}"
 
   if which curl >/dev/null; then
     # -L: 跟随重定向, --progress-bar: 显示进度条
-    if ! curl -L --progress-bar --insecure --user-agent "${user_agent}" -o "${file}" "${update_url}"; then
+    if ! curl -L --progress-bar --insecure --user-agent "${current_ua}" -o "${file}" "${update_url}"; then
       log Error "使用 curl 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
     fi
   else
     # --progress=bar:force: 显示进度条
-    if ! busybox wget --progress=bar:force --no-check-certificate --user-agent "${user_agent}" -O "${file}" "${update_url}"; then
+    if ! busybox wget --progress=bar:force --no-check-certificate --user-agent "${current_ua}" -O "${file}" "${update_url}"; then
       log Error "使用 wget 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
@@ -230,7 +237,6 @@ upcurl() {
     return 1
   fi
 
-  # 查找并移动 curl 二进制文件
   local curl_binary=$(find "${temp_extract_dir}" -type f -name "curl")
   if [ -n "${curl_binary}" ]; then
     mv "${curl_binary}" "${bin_dir}/curl"
@@ -327,76 +333,97 @@ upsubs() {
   fi
   case "${bin_name}" in
     "mihomo")
-      enhanced=false
-      update_file_name="${mihomo_config}"
-      if [ "${renew}" != "true" ]; then
-        enhanced=true
-        update_file_name="${update_file_name}.subscription"
+      local url_count=${#subscription_url_mihomo[@]}
+      local file_count=${#name_provide_mihomo_config[@]}
+
+      if [ "$url_count" -eq 0 ]; then
+        log Warning "${bin_name} 订阅链接为空 (subscription_url_mihomo is empty)"
+        return 1
       fi
-      # 订阅 mihomo
-      if [ -n "${subscription_url_mihomo}" ]; then
-        if [ "${update_subscription}" = "true" ]; then
-          log Info "${bin_name} 每日更新订阅 → $(date)"
-          log Debug "正在下载 ${update_file_name}"
-          if upfile "${update_file_name}" "${subscription_url_mihomo}"; then
-            log Info "${update_file_name} 已保存"
-            # 如果存在 yq 命令，则从 yml 中提取代理信息并输出到 mihomo_provide_config 文件
-            if [ "${enhanced}" = "true" ]; then
-              # 确保文件夹存在
-              mkdir -p "$(dirname "${mihomo_provide_config}")"
-              touch "${mihomo_provide_config}"
-              if ${yq} 'has("proxies")' "${update_file_name}" | grep -q "true"; then
-                ${yq} '.proxies' "${update_file_name}" >/dev/null 2>&1
-                ${yq} '.proxies' "${update_file_name}" > "${mihomo_provide_config}"
-                ${yq} -i '{"proxies": .}' "${mihomo_provide_config}"
-                if [ "${custom_rules_subs}" = "true" ]; then
-                  if ${yq} '.rules' "${update_file_name}" >/dev/null; then
-                    ${yq} '.rules' "${update_file_name}" > "${mihomo_provide_rules}"
-                    ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
-                    ${yq} -i 'del(.rules)' "${mihomo_config}"
-                    cat "${mihomo_provide_rules}" >> "${mihomo_config}"
-                  fi
-                fi
-                log Info "订阅成功"
-                log Info "更新订阅于 $(date +"%F %R")"
-                if [ -f "${update_file_name}.bak" ]; then
-                  rm "${update_file_name}.bak"
-                fi
-              elif ${yq} '.. | select(tag == "!!str")' "${update_file_name}" | grep -qE "vless://|vmess://|ss://|hysteria://|trojan://"; then
-                mv "${update_file_name}" "${mihomo_provide_config}"
-              else
-                log Error "${update_file_name} 更新订阅失败"
-                return 1
+
+      if [ "$url_count" -ne "$file_count" ]; then
+        log Error "订阅链接数量 (${url_count}) 与文件名数量 (${file_count}) 不匹配!"
+        return 1
+      fi
+
+      if [ "${update_subscription}" != "true" ]; then
+        log Warning "更新订阅已禁用: update_subscription=\"${update_subscription}\""
+        return 1
+      fi
+      
+      if [ "${renew}" = "true" ]; then
+        log Error "多订阅模式下不支持 renew=true"
+        return 1
+      fi
+
+      log Info "${bin_name} 开始更新 ${url_count} 个订阅 → $(date)"
+      
+      if [ -z "${mihomo_provide_path}" ] || ! mkdir -p "${mihomo_provide_path}"; then
+          log Error "mihomo_provide_path 未定义或无法创建目录!"
+          return 1
+      fi
+
+      local success_count=0
+      local rules_extracted=false
+
+      for i in $(seq 0 $((url_count - 1))); do
+        local url="${subscription_url_mihomo[$i]}"
+        local file_name="${name_provide_mihomo_config[$i]}"
+        local provider_file="${mihomo_provide_path}/${file_name}"
+        
+        log Info "--> 正在处理订阅 #${i}: ${file_name}"
+        
+        if upfile "${provider_file}" "${url}" "ClashMeta"; then
+          if ${yq} 'has("proxies")' "${provider_file}" &>/dev/null; then
+            if [ "${custom_rules_subs}" = "true" ] && [ "$rules_extracted" = "false" ]; then
+              if ${yq} 'has("rules")' "${provider_file}" &>/dev/null; then
+                log Info "在 ${file_name} 中找到规则, 正在提取..."
+                ${yq} '.rules' "${provider_file}" > "${mihomo_provide_rules}"
+                ${yq} -i '{"rules": .}' "${mihomo_provide_rules}"
+                log Info "规则已提取到 ${mihomo_provide_rules}"
+                rules_extracted=true
               fi
-            else
-              if [ -f "${box_pid}" ]; then
-                kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
-                $scripts_dir/box.service restart 2>/dev/null
-              fi
-              exit 1
             fi
-            return 0
+
+            log Debug "标准订阅格式, 正在提取 proxies 并覆盖原文件..."
+            local temp_proxies_file
+            temp_proxies_file=$(mktemp)
+            ${yq} '.proxies' "${provider_file}" > "${temp_proxies_file}"
+            ${yq} -i '{"proxies": .}' "${temp_proxies_file}"
+            mv "${temp_proxies_file}" "${provider_file}"
+
+            log Info "订阅 #${i} (标准格式) 已处理并保存"
+            success_count=$((success_count + 1))
+
+          elif ${yq} '.. | select(tag == "!!str")' "${provider_file}" | grep -qE "vless://|vmess://|ss://|hysteria://|trojan://"; then
+            log Info "订阅 #${i} (原始链接) 已保存"
+            success_count=$((success_count + 1))
           else
-            log Error "更新订阅失败"
-            return 1
+            log Error "订阅 #${i} (${file_name}) 格式无法识别或内容为空, 已删除"
+            rm -f "${provider_file}"
           fi
         else
-          log Warning "更新订阅已禁用: $update_subscription"
-          return 1
+          log Error "订阅 #${i} (${file_name}) 下载失败"
         fi
-      else
-        log Warning "${bin_name} 订阅链接为空..."
+      done
+
+      if [ ${success_count} -gt 0 ]; then
+        log Info "成功更新 ${success_count} / ${url_count} 个订阅"
+        log Warning "请确保您的 ${name_mihomo_config} 的 'proxy-providers' 部分已正确配置, 以加载这些订阅文件"
+        log Info "更新订阅于 $(date +"%F %R")"
         return 0
+      else
+        log Error "所有订阅链接均更新失败"
+        return 1
       fi
       ;;
     "sing-box")
-      # 订阅 sing-box
       update_file_name="${sing_config}"
       if [ -n "${subscription_url_singbox}" ]; then
         if [ "${update_subscription}" = "true" ]; then
           log Info "${bin_name} 每日更新订阅 → $(date)"
           log Debug "正在下载 ${update_file_name}"
-          if upfile "${update_file_name}" "${subscription_url_singbox}"; then
+          if upfile "${update_file_name}" "${subscription_url_singbox}" "sing-box"; then
             log Info "${update_file_name} 已保存"
             log Info "更新订阅于 $(date +"%F %R")"
             if [ -f "${box_pid}" ]; then
@@ -467,7 +494,6 @@ upkernel() {
       local release_page_url="https://github.com/vernesong/mihomo/releases/expanded_assets/Prerelease-Alpha"
       [ "${use_ghproxy}" = "true" ] && release_page_url="${url_ghproxy}/${release_page_url}"
       
-      # 从发布页面动态解析 smart-xxxxxxx 版本
       local smart_version_tag=$($rev1 "${release_page_url}" | busybox grep -oE "smart-[a-f0-9]+" | head -1)
 
       if [ -z "$smart_version_tag" ]; then
@@ -516,7 +542,6 @@ upkernel() {
         latest_version=$($rev1 "${download_link}/expanded_assets/${tag}" | busybox grep -oE "alpha-[0-9a-z]+" | head -1)
       fi
 
-      # Android uses zip, other platforms use gz
       local extension="gz"
       if [ "${platform}" = "android" ]; then
         extension="zip"
@@ -578,7 +603,6 @@ upkernels() {
   done
 }
 
-# 解压并处理核心
 xkernel() {
   local core_to_process="$1"
   local platform="$2"
@@ -587,7 +611,6 @@ xkernel() {
   local file_kernel="$5"
   
   local original_bin_name=$bin_name
-  # 确定最终的二进制文件名。mihomo_smart 只是一个别名，实际更新的是 mihomo。
   local target_bin_name="$core_to_process"
   if [ "$core_to_process" = "mihomo_smart" ]; then
     target_bin_name="mihomo"
@@ -606,7 +629,7 @@ xkernel() {
         log Info "${target_bin_name} 已成功更新 (来自: ${core_to_process})"
       else
         log Error "解压或移动 ${target_bin_name} 核心失败."
-        bin_name=$original_bin_name # 恢复原始的bin_name
+        bin_name=$original_bin_name
         return 1
       fi
       ;;
@@ -658,7 +681,6 @@ xkernel() {
       rm -rf "${bin_dir}/update"
       ;;
     "hysteria")
-      # Hysteria 是单个二进制文件，upfile 直接下载完成，这里无需额外操作
       true
       ;;
     *)
@@ -668,14 +690,11 @@ xkernel() {
       ;;
   esac
 
-  # 清理下载的临时文件
   find "${box_dir}" -maxdepth 1 -type f -name "${file_kernel}.*" -delete
 
-  # 为最终的二进制文件设置正确的权限
   chown ${box_user_group} "${bin_dir}/${target_bin_name}"
   chmod 0755 "${bin_dir}/${target_bin_name}"
   
-  # 如果更新的核心就是当前正在运行的核心，则重启服务
   if [ -f "${box_pid}" ]; then
     if [ "$original_bin_name" = "$target_bin_name" ]; then
       log Info "检测到正在运行的核心已被更新，将自动重启服务..."
@@ -698,7 +717,6 @@ upxui() {
     url="https://github.com/Zephyruso/zashboard/releases/latest/download/dist.zip"
     dir_name="dist"
     
-    # 使用 upfile for download
     if upfile "${file_dashboard}" "${url}"; then
       if [ ! -d "${box_dir}/${xdashboard}" ]; then
         log Info "面板文件夹不存在, 正在创建"
@@ -712,7 +730,6 @@ upxui() {
         unzip_command="busybox unzip"
       fi
       log Info "正在解压 Dashboard..."
-      # Use -oq for quiet unzip
       if "${unzip_command}" -oq "${file_dashboard}" "${dir_name}/*" -d "${box_dir}/${xdashboard}"; then
         mv -f "${box_dir}/${xdashboard}/$dir_name"/* "${box_dir}/${xdashboard}/"
         rm -f "${file_dashboard}"
