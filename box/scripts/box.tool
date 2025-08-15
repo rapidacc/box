@@ -333,14 +333,14 @@ upsubs() {
         enhanced=true
         update_file_name="${update_file_name}.subscription"
       fi
-      # 订阅 clash
+      # 订阅 mihomo
       if [ -n "${subscription_url_mihomo}" ]; then
         if [ "${update_subscription}" = "true" ]; then
           log Info "${bin_name} 每日更新订阅 → $(date)"
           log Debug "正在下载 ${update_file_name}"
           if upfile "${update_file_name}" "${subscription_url_mihomo}"; then
             log Info "${update_file_name} 已保存"
-            # 如果存在 yq 命令，则从 yml 中提取代理信息并输出到 clash_provide_config 文件
+            # 如果存在 yq 命令，则从 yml 中提取代理信息并输出到 mihomo_provide_config 文件
             if [ "${enhanced}" = "true" ]; then
               # 确保文件夹存在
               mkdir -p "$(dirname "${mihomo_provide_config}")"
@@ -398,11 +398,12 @@ upsubs() {
           log Debug "正在下载 ${update_file_name}"
           if upfile "${update_file_name}" "${subscription_url_singbox}"; then
             log Info "${update_file_name} 已保存"
+            log Info "更新订阅于 $(date +"%F %R")"
             if [ -f "${box_pid}" ]; then
               kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
               $scripts_dir/box.service restart 2>/dev/null
             fi
-            exit 1
+            return 0
           else
             log Error "更新订阅失败"
             return 1
@@ -1001,7 +1002,6 @@ case "$1" in
       upgeox
     else
       upsubs
-      [ "${bin_name}" != "mihomo" ] && exit 1
     fi
     if [ -f "${box_pid}" ]; then
       kill -0 "$(<"${box_pid}" 2>/dev/null)" && reload
