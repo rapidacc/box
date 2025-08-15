@@ -1,3 +1,4 @@
+
 #!/system/bin/sh
 
 SKIPUNZIP=1
@@ -229,7 +230,8 @@ if [ "${backup_box}" = "true" ]; then
     
     grep -E '^[a-zA-Z0-9_]+=' "${temp_dir}/settings.ini" | while IFS='=' read -r key value; do
       if grep -q -E "^${key}=" "/data/adb/box/settings.ini.new"; then
-        sed -i "s#^${key}=.*#${key}=${value}#" "/data/adb/box/settings.ini.new"
+        escaped_value=$(echo "${value}" | sed -e 's/[&\\#]/\\&/g')
+        sed -i "s#^${key}=.*#${key}=${escaped_value}#" "/data/adb/box/settings.ini.new"
       fi
     done
     
