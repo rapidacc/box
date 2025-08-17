@@ -223,24 +223,6 @@ if [ "${backup_box}" = "true" ]; then
   ui_print " "
   ui_print "- 正在恢复用户配置和数据..."
 
-  if [ -f "${temp_dir}/settings.ini" ] && [ -f "/data/adb/box/settings.ini" ]; then
-    ui_print "  - 检测到旧的 settings.ini，尝试应用用户修改..."
-    
-    mv /data/adb/box/settings.ini /data/adb/box/settings.ini.new
-    
-    grep -E '^[a-zA-Z0-9_]+=' "${temp_dir}/settings.ini" | while IFS='=' read -r key value; do
-      if grep -q -E "^${key}=" "/data/adb/box/settings.ini.new"; then
-        escaped_value=$(echo "${value}" | sed -e 's/[&\\#]/\\&/g')
-        sed -i "s#^${key}=.*#${key}=${escaped_value}#" "/data/adb/box/settings.ini.new"
-      fi
-    done
-    
-    mv /data/adb/box/settings.ini.new /data/adb/box/settings.ini
-    ui_print "  - 用户自定义设置已合并至新版 settings.ini"
-  elif [ -f "${temp_dir}/settings.ini" ]; then
-    cp -f "${temp_dir}/settings.ini" "/data/adb/box/settings.ini"
-  fi
-
   restore_config_dir() {
     config_dir="$1"
     if [ -d "${temp_dir}/${config_dir}" ]; then

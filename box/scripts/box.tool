@@ -60,19 +60,32 @@ upfile() {
   log Debug "使用 User-Agent: ${current_ua}"
 
   if which curl >/dev/null; then
-    # -L: 跟随重定向, --progress-bar: 显示进度条
-    if ! curl -L --progress-bar --insecure --user-agent "${current_ua}" -o "${file}" "${update_url}"; then
-      log Error "使用 curl 下载失败"
+    http_code=$(curl -L -s --insecure --user-agent "${current_ua}" -o "${file}" -w "%{http_code}" "${update_url}")
+    curl_exit_code=$?
+
+    if [ ${curl_exit_code} -ne 0 ]; then
+      log Error "使用 curl 下载失败 (退出码: ${curl_exit_code})"
+      [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
+      return 1
+    fi
+
+    if [ "${http_code}" -ne 200 ]; then
+      log Error "下载失败: 服务器返回 HTTP 状态码 ${http_code}"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
     fi
   else
-    # --progress=bar:force: 显示进度条
     if ! busybox wget --progress=bar:force --no-check-certificate --user-agent "${current_ua}" -O "${file}" "${update_url}"; then
       log Error "使用 wget 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
     fi
+  fi
+
+  if [ ! -s "${file}" ]; then
+    log Error "下载失败: 文件为空"
+    [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
+    return 1
   fi
   
   log Info "下载成功"
@@ -150,7 +163,7 @@ check() {
 
 # 重载基础配置
 reload() {
-  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
+  ip_port=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/external-controller:/ {print $2}' "${mihomo_config}" | sed "s/'//g"; else busybox awk -F'[:,]' '/"external_controller"/ {print $2":"$3}' "${sing_config}" | sed 's/^[ \t]*//;s/"//g'; fi;)
   secret=$(if [ "${bin_name}" = "mihomo" ]; then busybox awk '/^secret:/ {print $2}' "${mihomo_config}" | sed 's/"//g'; else busybox awk -F'"' '/"secret"/ {print $4}' "${sing_config}" | head -n 1; fi;)
 
   curl_command="curl"
@@ -323,6 +336,11 @@ upgeox_all() {
 
 # 检查并更新订阅
 upsubs() {
+  if [ "${update_subscription}" != "true" ]; then
+    log Warning "更新订阅已禁用: update_subscription=\"${update_subscription}\""
+    return 1
+  fi
+
   yq="yq"
   if ! command -v yq &>/dev/null; then
     if [ ! -e "${box_dir}/bin/yq" ]; then
@@ -346,16 +364,8 @@ upsubs() {
         return 1
       fi
 
-      if [ "${update_subscription}" != "true" ]; then
-        log Warning "更新订阅已禁用: update_subscription=\"${update_subscription}\""
-        return 1
-      fi
-      
-      if [ "${renew}" = "true" ]; then
-        log Error "多订阅模式下不支持 renew=true"
-        return 1
-      fi
 
+      
       log Info "${bin_name} 开始更新 ${url_count} 个订阅 → $(date)"
       
       if [ -z "${mihomo_provide_path}" ] || ! mkdir -p "${mihomo_provide_path}"; then
@@ -364,6 +374,7 @@ upsubs() {
       fi
 
       local success_count=0
+      local update_failed=false
       local rules_extracted=false
 
       for i in $(seq 0 $((url_count - 1))); do
@@ -372,9 +383,33 @@ upsubs() {
         local provider_file="${mihomo_provide_path}/${file_name}"
         
         log Info "--> 正在处理订阅 #${i}: ${file_name}"
+
+        if [ "${renew}" = "true" ] && [ "$i" -eq 0 ]; then
+          log Info "检测到 renew=true, 仅使用第一个订阅链接更新"
+          if upfile "${mihomo_config}" "${url}" "ClashMeta"; then
+            log Info "config.yaml 更新成功"
+            if [ -f "${box_pid}" ]; then
+              kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
+              $scripts_dir/box.service restart 2>/dev/null
+            fi
+            log Info "${bin_name} 订阅更新完成 → $(date)"
+            exit 0
+          else
+            log Error "config.yaml 更新失败"
+            exit 1
+          fi
+        fi
         
         if upfile "${provider_file}" "${url}" "ClashMeta"; then
-          if ${yq} 'has("proxies")' "${provider_file}" &>/dev/null; then
+          local decoded_content
+          decoded_content=$(base64 -d "${provider_file}" 2>/dev/null)
+
+          if [ $? -eq 0 ] && echo "${decoded_content}" | grep -qE "vless://|vmess://|ss://|hysteria://|trojan://"; then
+            log Info "检测到 Base64 编码订阅, 正在解码..."
+            echo "${decoded_content}" > "${provider_file}"
+            log Info "订阅 #${i} (Base64解码/原始链接) 已保存"
+            success_count=$((success_count + 1))
+          elif ${yq} 'has("proxies")' "${provider_file}" &>/dev/null; then
             if [ "${custom_rules_subs}" = "true" ] && [ "$rules_extracted" = "false" ]; then
               if ${yq} 'has("rules")' "${provider_file}" &>/dev/null; then
                 log Info "在 ${file_name} 中找到规则, 正在提取..."
@@ -401,42 +436,39 @@ upsubs() {
           else
             log Error "订阅 #${i} (${file_name}) 格式无法识别或内容为空, 已删除"
             rm -f "${provider_file}"
+            update_failed=true
           fi
         else
           log Error "订阅 #${i} (${file_name}) 下载失败"
+          update_failed=true
         fi
       done
 
-      if [ ${success_count} -gt 0 ]; then
-        log Info "成功更新 ${success_count} / ${url_count} 个订阅"
+      log Info "成功更新 ${success_count} / ${url_count} 个订阅"
+      if [ "${update_failed}" = "true" ]; then
+        log Error "部分订阅链接更新失败"
+        return 1
+      else
         log Warning "请确保您的 ${name_mihomo_config} 的 'proxy-providers' 部分已正确配置, 以加载这些订阅文件"
         log Info "更新订阅于 $(date +"%F %R")"
         return 0
-      else
-        log Error "所有订阅链接均更新失败"
-        return 1
       fi
       ;;
     "sing-box")
       update_file_name="${sing_config}"
       if [ -n "${subscription_url_singbox}" ]; then
-        if [ "${update_subscription}" = "true" ]; then
-          log Info "${bin_name} 每日更新订阅 → $(date)"
-          log Debug "正在下载 ${update_file_name}"
-          if upfile "${update_file_name}" "${subscription_url_singbox}" "sing-box"; then
-            log Info "${update_file_name} 已保存"
-            log Info "更新订阅于 $(date +"%F %R")"
-            if [ -f "${box_pid}" ]; then
-              kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
-              $scripts_dir/box.service restart 2>/dev/null
-            fi
-            return 0
-          else
-            log Error "更新订阅失败"
-            return 1
+        log Info "${bin_name} 每日更新订阅 → $(date)"
+        log Debug "正在下载 ${update_file_name}"
+        if upfile "${update_file_name}" "${subscription_url_singbox}" "sing-box"; then
+          log Info "${update_file_name} 已保存"
+          log Info "更新订阅于 $(date +"%F %R")"
+          if [ -f "${box_pid}" ]; then
+            kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
+            $scripts_dir/box.service restart 2>/dev/null
           fi
+          return 0
         else
-          log Warning "更新订阅已禁用: $update_subscription"
+          log Error "更新订阅失败"
           return 1
         fi
       else
@@ -1008,7 +1040,7 @@ case "$1" in
     $1
     ;;
   geosub)
-    upsubs
+    upsubs || exit 1
     upgeox
     if [ -f "${box_pid}" ]; then
       kill -0 "$(<"${box_pid}" 2>/dev/null)" && reload
@@ -1018,7 +1050,7 @@ case "$1" in
     if [ "$1" = "geox" ]; then
       upgeox
     else
-      upsubs
+      upsubs || exit 1
     fi
     if [ -f "${box_pid}" ]; then
       kill -0 "$(<"${box_pid}" 2>/dev/null)" && reload
