@@ -75,7 +75,7 @@ upfile() {
       return 1
     fi
   else
-    if ! busybox wget --progress=bar:force --no-check-certificate --user-agent "${current_ua}" -O "${file}" "${update_url}"; then
+    if ! busybox wget --no-check-certificate -q -U "${current_ua}" -O "${file}" "${update_url}"; then
       log Error "使用 wget 下载失败"
       [ -f "${file_bak}" ] && mv "${file_bak}" "${file}"
       return 1
