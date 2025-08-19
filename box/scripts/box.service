@@ -487,7 +487,7 @@ box_run_bin() {
         prepare_singbox
       fi
       if ${bin_path} check -c "${sing_config}" -D "${box_dir}/${bin_name}" > "${box_run}/${bin_name}.log" 2>&1; then
-        nohup busybox setuidgid "${box_user_group}" "${bin_path}" run -D "${sing_config}" -C "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
+        nohup busybox setuidgid "${box_user_group}" "${bin_path}" run -c "${sing_config}" -D "${box_dir}/${bin_name}" > "${bin_log}" 2>&1 &
         PID=$!
         echo -n $PID > "${box_pid}"
       else
