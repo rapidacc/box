@@ -8,7 +8,6 @@ table="2024"
 pref="100"
 # 使用 iptables 规则禁用或启用 QUIC。注意，这可能导致部分网站无法访问。
 quic="enable"
-tun_forward="enable"
 mihomo_dns_forward="enable"
 fake_ip_range=""
 
@@ -46,7 +45,6 @@ case "${bin_name}" in
     fake_ip6_range=$(busybox awk -F'"' '/inet6_range/ {print $4}' "${sing_config}")
     ;;
   "hysteria")
-    # 验证 hysteria 的 network_mode
     case "${network_mode}" in
       redirect|tproxy|enhance)
         # 支持的模式，无需操作
@@ -192,73 +190,10 @@ probe_tun_device() {
   busybox ifconfig | grep -q "${tun_device}" || return 1
 }
 
-probe_tun_index() {
-  while [ ! -f "/data/misc/net/rt_tables" ]; do
-    sleep 1
-  done
-
-  while read -r index name; do
-    if [ "${name}" = "${tun_device}" ]; then
-      tun_table_index=${index}
-      return 0
-    fi
-  done < /data/misc/net/rt_tables
-
-  return 1
-}
-
-tun_forward_ip_rules() {
-  local action=$1
-  ipv4_rules=(
-    "iif lo goto 6000 pref 5000"
-    "iif ${tun_device} lookup main suppress_prefixlength 0 pref 5010"
-    "iif ${tun_device} goto 6000 pref 5020"
-    "from 10.0.0.0/8 lookup ${tun_table_index} pref 5030"
-    "from 172.16.0.0/12 lookup ${tun_table_index} pref 5040"
-    "from 192.168.0.0/16 lookup ${tun_table_index} pref 5050"
-    "nop pref 6000"
-  )
-
-  ipv6_rules=(
-    "iif lo goto 6000 pref 5000"
-    "iif ${tun_device} lookup main suppress_prefixlength 0 pref 5010"
-    "iif ${tun_device} goto 6000 pref 5020"
-    "from fc00::/7 lookup ${tun_table_index} pref 5030"   # ULA
-    "from fd00::/8 lookup ${tun_table_index} pref 5040"   # ULA 子集
-    "from fe80::/10 lookup ${tun_table_index} pref 5050"  # 链路本地
-    # "from 2000::/3 lookup ${tun_table_index} pref 5060"
-    "nop pref 6000"
-  )
-
-  if [ "${iptables}" = "$IPV" ]; then
-    for rule in "${ipv4_rules[@]}"; do
-      ip -4 rule "${action}" ${rule}
-    done
-  else
-    for rule in "${ipv6_rules[@]}"; do
-      ip -6 rule "${action}" ${rule}
-    done
-  fi
-}
-
-tun_forward_ip_rules_del() {
-  for pref in 5000 5010 5020 5030 5040 5050 6000; do
-    ip -4 rule del pref $pref >/dev/null 2>&1
-    ip -6 rule del pref $pref >/dev/null 2>&1
-  done
-}
-
-sing_tun_ip_rules() {
-  ip -4 rule $1 from all iif ${tun_device} lookup main suppress_prefixlength 0 pref 8000
-  ip -4 rule $1 lookup main pref 7000
-  ip -6 rule $1 from all iif ${tun_device} lookup main suppress_prefixlength 0 pref 8000
-  ip -6 rule $1 lookup main pref 7000
-}
-
 forward() {
   local action=$1
 
-  ${iptables} -t nat "${action}" POSTROUTING -o ${tun_device} -j MASQUERADE
+  # ${iptables} -t nat "${action}" POSTROUTING -o ${tun_device} -j MASQUERADE
 
   ${iptables} "${action}" FORWARD -i "${tun_device}" -j ACCEPT
   ${iptables} "${action}" FORWARD -o "${tun_device}" -j ACCEPT
@@ -267,28 +202,8 @@ forward() {
   sysctl -w net.ipv4.conf.default.rp_filter=2
   sysctl -w net.ipv4.conf.all.rp_filter=2
 
-  probe_tun_index
-
-  if [ "${tun_forward}" = "enable" ]; then
-    if probe_tun_device; then
-      tun_forward_ip_rules_del
-      tun_forward_ip_rules "${action}"
-      if [ "${action}" = "-I" ]; then
-        sing_tun_ip_rules "add"
-      else
-        sing_tun_ip_rules "del"
-      fi
-      return 0
-    else
-      tun_forward_ip_rules_del
-      tun_forward_ip_rules -D
-      sing_tun_ip_rules "del"
-      return 1
-    fi
-  fi
 } >/dev/null 2>&1
 
-# 下面所有日志和注释均已汉化
 start_redirect() {
   if [ "${iptables}" = "$IPV" ]; then
     ${iptables} -t nat -N BOX_EXTERNAL
@@ -329,6 +244,9 @@ start_redirect() {
     ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i lo -j REDIRECT --to-ports "${redir_port}"
 
     if [ "${ap_list}" != "" ]; then
+      for ap in "${ap_list[@]}"; do
+        ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i "${ap}" -j REDIRECT --to-ports "${redir_port}"
+      done
         [ ${network_mode} = "enhance" ] || log Info "${ap_list[*]} 透明代理。"
     fi
 
@@ -458,9 +376,9 @@ start_tproxy() {
   fi
 
   # 跳过已被 TProxy 处理的流量，若默认路由接口有公网 IP，省略这些规则会导致本地流量代理异常，可能拖慢全网
-  [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_EXTERNAL -p tcp -m socket --transparent -j MARK --set-xmark ${fwmark}
-  ${iptables} -t mangle -A BOX_EXTERNAL -p udp -m socket --transparent -j MARK --set-xmark ${fwmark}
-  ${iptables} -t mangle -A BOX_EXTERNAL -m socket -j RETURN
+  # [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -A BOX_EXTERNAL -p tcp -m socket --transparent -j MARK --set-xmark ${fwmark}
+  # ${iptables} -t mangle -A BOX_EXTERNAL -p udp -m socket --transparent -j MARK --set-xmark ${fwmark}
+  # ${iptables} -t mangle -A BOX_EXTERNAL -m socket -j RETURN
  
   # 跳过内网，兼容性可用 su -c 'zcat /proc/config.gz | grep -i addrtype' 检查
   # ${iptables} -t mangle -A BOX_EXTERNAL -m addrtype --dst-type LOCAL -j RETURN
@@ -496,10 +414,6 @@ start_tproxy() {
   ${iptables} -t mangle -N BOX_LOCAL
   ${iptables} -t mangle -F BOX_LOCAL
 
-  if [ "${iptables}" = "$IP6V" ]; then
-    ${iptables} -t mangle -A BOX_LOCAL -o lo -j RETURN
-    ${iptables} -t mangle -A BOX_LOCAL -d ::1/128 -j RETURN
-  fi
   ${iptables} -t mangle -A BOX_LOCAL -m owner --uid-owner ${box_user} --gid-owner ${box_group} -j RETURN
   # ${iptables} -t mangle -A BOX_LOCAL -m mark --mark ${routing_mark} -j RETURN
 
@@ -587,11 +501,11 @@ start_tproxy() {
 
   ${iptables} -t mangle -I OUTPUT -j BOX_LOCAL
 
-  # ${iptables} -t mangle -N DIVERT
-  # ${iptables} -t mangle -F DIVERT
-  # ${iptables} -t mangle -A DIVERT -j MARK --set-xmark "${fwmark}"
-  # ${iptables} -t mangle -A DIVERT -j ACCEPT
-  # [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -I PREROUTING -p tcp -m socket -j DIVERT
+  ${iptables} -t mangle -N DIVERT
+  ${iptables} -t mangle -F DIVERT
+  ${iptables} -t mangle -A DIVERT -j MARK --set-xmark "${fwmark}"
+  ${iptables} -t mangle -A DIVERT -j ACCEPT
+  [ ${network_mode} = "enhance" ] || ${iptables} -t mangle -I PREROUTING -p tcp -m socket -j DIVERT
 
   # 禁用 QUIC
   if [ "${quic}" = "disable" ]; then
@@ -941,7 +855,6 @@ else
         disable_ipv6
         log Warning "已禁用 IPv6。"
       fi
-      [ "${tun_forward}" = "enable" ] && log Info "TUN 热点支持已启用。" || log Warning "TUN 热点支持已禁用。"
       [ $1 = "renew" ] && log Info "重启 iptables TUN 规则完成。"
       bin_alive && log Info "${bin_name} 已连接。"
       ;;

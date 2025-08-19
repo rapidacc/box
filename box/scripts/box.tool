@@ -387,7 +387,7 @@ upsubs() {
         if [ "${renew}" = "true" ] && [ "$i" -eq 0 ]; then
           log Info "检测到 renew=true, 仅使用第一个订阅链接更新"
           if upfile "${mihomo_config}" "${url}" "ClashMeta"; then
-            log Info "config.yaml 更新成功"
+            log Info "${mihomo_config} 更新成功"
             if [ -f "${box_pid}" ]; then
               kill -0 "$(<"${box_pid}" 2>/dev/null)" && \
               $scripts_dir/box.service restart 2>/dev/null
@@ -395,7 +395,7 @@ upsubs() {
             log Info "${bin_name} 订阅更新完成 → $(date)"
             exit 0
           else
-            log Error "config.yaml 更新失败"
+            log Error "${mihomo_config} 更新失败"
             exit 1
           fi
         fi
