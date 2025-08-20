@@ -25,10 +25,11 @@ is_wifi_connected() {
 }
 is_allowed_wifi() {
     local ssid=$1
-    local allowed_ssids=$2
-    if echo " $allowed_ssids " | tr ',' ' ' | grep -q " $ssid "; then
-        return 0
-    else
-        return 1
-    fi
+    shift
+    for candidate in "$@"; do
+        if [ "$candidate" = "$ssid" ]; then
+            return 0
+        fi
+    done
+    return 1
 }

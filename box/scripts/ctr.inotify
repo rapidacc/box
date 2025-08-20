@@ -5,7 +5,7 @@ export PATH="/data/adb/magisk:/data/adb/ksu/bin:/data/adb/ap/bin:$PATH:/data/dat
 module_dir="/data/adb/modules/box_for_root"
 base_dir="/data/adb/box"
 variab_dir="${base_dir}/run/variab"
-log_file="${base_dir}/run/Networkswitch_debug.log"
+log_file="${base_dir}/run/netswitch.log"
 log_file_path="/data/local/tmp/"
 temp_log_file="${log_file_path}debug.log.tmp"
 last_check_file="${variab_dir}/last_check_time"
@@ -127,8 +127,17 @@ check_module_service() {
                 else
                     if [ "$use_ssid_matching" = "true" ]; then
                         if [ "$use_wifi_list_mode" = "blacklist" ]; then
-                            log_msg "策略: WiFi黑名单模式, 名单: ${wifi_ssids_list}"
-                            if is_allowed_wifi "$ssid" "$wifi_ssids_list"; then
+                            # 使用引号和逗号分隔来处理包含空格的SSID
+                            ssid_list_str=""
+                            for ssid_item in "${wifi_ssids_list[@]}"; do
+                                if [ -z "$ssid_list_str" ]; then
+                                    ssid_list_str="'$ssid_item'"
+                                else
+                                    ssid_list_str="$ssid_list_str, '$ssid_item'"
+                                fi
+                            done
+                            log_msg "策略: WiFi黑名单模式, 名单: [$ssid_list_str]"
+                            if is_allowed_wifi "$ssid" "${wifi_ssids_list[@]}"; then
                                 log_msg "结果: ${ssid} 在黑名单中"
                                 if [ "$current_state" != "disabled" ]; then
                                     "$iptables_script" disable
@@ -148,8 +157,17 @@ check_module_service() {
                                 fi
                             fi
                         elif [ "$use_wifi_list_mode" = "whitelist" ]; then
-                            log_msg "策略: WiFi白名单模式, 名单: ${wifi_ssids_list}"
-                            if is_allowed_wifi "$ssid" "$wifi_ssids_list"; then
+                            # 使用引号和逗号分隔来处理包含空格的SSID
+                            ssid_list_str=""
+                            for ssid_item in "${wifi_ssids_list[@]}"; do
+                                if [ -z "$ssid_list_str" ]; then
+                                    ssid_list_str="'$ssid_item'"
+                                else
+                                    ssid_list_str="$ssid_list_str, '$ssid_item'"
+                                fi
+                            done
+                            log_msg "策略: WiFi白名单模式, 名单: [$ssid_list_str]"
+                            if is_allowed_wifi "$ssid" "${wifi_ssids_list[@]}"; then
                                 log_msg "结果: ${ssid} 在白名单中"
                                 if [ "$current_state" != "enabled" ]; then
                                     "$service_script" start
