@@ -8,27 +8,21 @@ PROPFILE="/data/adb/modules/box_for_root/module.prop"
 find_packages_uid() {
   local uid_log="${box_run}/uid.log"
 
-  # --- 1. 初始化，创建覆盖写入的日志文件 ---
-  cat > "${uid_log}" <<-EOF
- --- Box UID/GID 查询日志 ---
- $(date)
- [Info] 代理模式: ${proxy_mode}
+  : > "${uid_log}"
+  echo "--- Box UID/GID 查询日志 ---" >> "${uid_log}"
+  echo "$(date)" >> "${uid_log}"
+  echo "[Info] 代理模式: ${proxy_mode}" >> "${uid_log}"
+  echo "" >> "${uid_log}"
+  echo "--- 从 package.list.cfg 读取的列表 ---" >> "${uid_log}"
+  echo "[Debug] 统一应用列表: ${packages_list[*]}" >> "${uid_log}"
+  echo "[Debug] GID 列表: ${gid_list[*]}" >> "${uid_log}"
 
- --- 从 package.list.cfg 读取的列表 ---
- [Debug] 统一应用列表: ${packages_list_multiuser[*]}
- [Debug] GID 列表: ${gid_list[*]}
- ----------------------------------------
-
-EOF
-
-  # 清空最终的 UID 列表文件
   > "${uid_list}"
 
-  # --- 2. 处理包名并记录日志 ---
+  echo "" >> "${uid_log}"
   echo "--- 处理结果 ---" >> "${uid_log}"
 
-  # 统一处理所有带用户ID前缀的包名
-  for entry in "${packages_list_multiuser[@]}"; do
+  for entry in "${packages_list[@]}"; do
     prefix="${entry%%:*}"
     package="${entry#*:}"
     
@@ -43,31 +37,27 @@ EOF
     fi
   done
 
-  # --- 3. 排序去重并生成最终结果日志 ---
-  # 如果列表不为空，则排序和去重
+  if [ ${#gid_list[@]} -gt 0 ]; then
+    printf "%s\n" "${gid_list[@]}" >> "${uid_list}"
+    echo "[Info] Success: GID: ${gid_list[*]} -> 已添加" >> "${uid_log}"
+  fi
+
   if [ -s "${uid_list}" ]; then
     local temp_uid_list="${box_run}/temp_uid.list"
     busybox sort -un "${uid_list}" > "${temp_uid_list}"
     mv "${temp_uid_list}" "${uid_list}"
   fi
 
-  echo "" >> "${uid_log}"
-  echo "--- 用于 iptables 的最终列表 ---" >> "${uid_log}"
-  echo "[Debug] 最终 GID 列表: ${gid_list[*]}" >> "${uid_log}"
-  echo "[Debug] 最终 UID 列表 (来自 ${uid_list}):" >> "${uid_log}"
-  # 使用 cat 而不是 echo，以防列表过长
-  cat "${uid_list}" >> "${uid_log}"
-  echo "---------------------------------" >> "${uid_log}"
 }
 
 log_service_results() {
     local core_name="$1"
-    local proxy_mode_type="$2" # include or exclude
+    local proxy_mode_type="$2"
     local uids="$3"
 
-    echo "" >> "${box_run}/uid.log"
+    echo "" >> "${uid_log}"
     echo "--- ${core_name} 服务处理结果 ---" >> "${box_run}/uid.log"
-    echo "时间: $(date)" >> "${box_run}/uid.log"
+    echo "$(date)" >> "${box_run}/uid.log"
     echo "[Info] 操作: 更新TUN模式UID列表" >> "${box_run}/uid.log"
     
     if [ -n "$uids" ]; then
@@ -77,7 +67,6 @@ log_service_results() {
         echo "[Info] 模式: ${proxy_mode_type}" >> "${box_run}/uid.log"
         echo "[Debug] 应用的 UIDs: (无)" >> "${box_run}/uid.log"
     fi
-    echo "-----------------------------" >> "${box_run}/uid.log"
 }
 
 box_check_logs() {
@@ -398,9 +387,8 @@ prepare_mihomo() {
       mode="exclude"
     fi
 
-    # 兼容旧配置，删除 package 字段; 重置 include/exclude_uid; 启用tun
-    sed -i -e "/^tun:/,/^[^ ]/ { /exclude-package:/d; /include-package:/d; }" \
-        -e "s/exclude-uid:.*/exclude-uid: []/g" \
+    # 重置 include/exclude_uid 列表并启用 tun
+    sed -i -e "s/exclude-uid:.*/exclude-uid: []/g" \
         -e "s/include-uid:.*/include-uid: []/g" \
         -e "/tun:/,/enable:/ { /enable: false/ s/enable: false/enable: true/ }" \
         "${mihomo_config}"
@@ -672,6 +660,7 @@ box_bin_status() {
   fi
 }
 
+# ========== 新增 set_description 函数 ===========
 set_description() {
   local status="$1" # running, stopped, idle
   local error_msg="$2"
@@ -698,6 +687,7 @@ set_description() {
     else
       ssid_mode_str="未知模式"
     fi
+    # 使用引号和逗号分隔来处理包含空格的SSID，与日志格式保持一致
     ssid_list_str=""
     for ssid_item in "${wifi_ssids_list[@]}"; do
       if [ -z "$ssid_list_str" ]; then
