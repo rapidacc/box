@@ -58,3 +58,80 @@ jobs:
           chmod +x build.sh
           ./build.sh
 
+  telegram-upload:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    needs:
+      - build
+    if: success()
+    steps:
+      - uses: actions/checkout@v4.1.0
+        with:
+          fetch-depth: 0
+
+      - name: Get Version and Artifact Name
+        id: get_version
+        run: |
+          VERSION=$(grep -oP 'version=\K[^ ]+' module.prop | tr -d '\r')
+          COMMIT_HASH=$(git log -1 --pretty=format:"%h")
+          ARTIFACT_NAME="box_${VERSION}(${COMMIT_HASH})"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "artifact_name=$ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Get Commit Info
+        id: commit_info
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=format:"%B")
+          COMMIT_HASH=$(git log -1 --pretty=format:"%h")
+          COMMIT_AUTHOR=$(git log -1 --pretty=format:"%an")
+          COMMIT_DATE=$(git log -1 --pretty=format:"%ad" --date=short)
+          
+          # Escape HTML special characters for Telegram HTML parse mode
+          COMMIT_MSG_ESCAPED=$(echo "$COMMIT_MSG" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+          COMMIT_AUTHOR_ESCAPED=$(echo "$COMMIT_AUTHOR" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+          
+          # Use EOF delimiter for multiline output
+          {
+            echo 'commit_msg<<EOF'
+            echo "$COMMIT_MSG_ESCAPED"
+            echo 'EOF'
+          } >> "$GITHUB_OUTPUT"
+          
+          echo "commit_hash=$COMMIT_HASH" >> "$GITHUB_OUTPUT"
+          
+          echo "commit_author=$COMMIT_AUTHOR_ESCAPED" >> "$GITHUB_OUTPUT"
+          
+          echo "commit_date=$COMMIT_DATE" >> "$GITHUB_OUTPUT"
+
+      - name: Send to Telegram
+        env:
+          TG_BOT_TOKEN: ${{ secrets.TG_BOT_TOKEN }}
+          TG_CHAT_ID: ${{ secrets.TG_CHAT_ID }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          ARTIFACT_URL=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            | jq -r ".artifacts[] | select(.name == \"${{ steps.get_version.outputs.artifact_name }}\") | .archive_download_url")
+          
+          if [ -z "$ARTIFACT_URL" ] || [ "$ARTIFACT_URL" = "null" ]; then
+            echo "Artifact not found: ${{ steps.get_version.outputs.artifact_name }}"
+            exit 1
+          fi
+          
+          curl -sSL -H "Authorization: Bearer $GITHUB_TOKEN" "$ARTIFACT_URL" -o "${{ steps.get_version.outputs.artifact_name }}.zip"
+
+          MESSAGE="📦 <b>Box 模块自动构建</b>
+          
+          <b>提交:</b> <code>${{ steps.commit_info.outputs.commit_hash }}</code>
+          <b>作者:</b> ${{ steps.commit_info.outputs.commit_author }}
+          <b>日期:</b> ${{ steps.commit_info.outputs.commit_date }}
+          <b>内容:</b> ${{ steps.commit_info.outputs.commit_msg }}
+          
+          <a href='https://github.com/boxproxy/box'>仓库地址</a> | <a href='https://github.com/boxproxy/box/actions/runs/${{ github.run_id }}'>构建详情</a>"
+          
+          curl -sS -f -F "chat_id=$TG_CHAT_ID" \
+               -F "document=@${{ steps.get_version.outputs.artifact_name }}.zip" \
+               -F "caption=$MESSAGE" \
+               -F "parse_mode=HTML" \
+               "https://api.telegram.org/bot$TG_BOT_TOKEN/sendDocument"
