@@ -80,8 +80,8 @@ box_check_logs() {
     done
     # 删除其他日志文件
     find "${box_run}" -maxdepth 1 -type f \( -name "root" -o \( -name "*.list" -a ! -name "appuid.list" \) -o -name "*.inotify.log" \) -exec rm -f {} +
-    # 删除三天前的日志
-    find "${box_run}" -maxdepth 1 -type f -name "*.log" -mtime +3 -exec rm -f {} +
+    # 删除一天前的日志
+    find "${box_run}" -maxdepth 1 -type f \( -name "*.log" -o -name "*.old.log" \) -mtime +1 -exec rm -f {} +
   ) &
 }
 
@@ -104,9 +104,7 @@ box_bin_alive() {
 }
 
 box_run_crontab() {
-  # 停止已运行的 crond（可选）
   pkill -f "busybox crond" >/dev/null 2>&1
-  # 准备 crontab
   busybox crontab -c "${box_run}" -r
   echo "# root 的定时任务" > "${box_run}/root"
 
@@ -122,7 +120,6 @@ box_run_crontab() {
     fi
     cat "${box_dir}/crontab.cfg" >> "${box_run}/root"
     chmod 0644 "${box_run}/root"
-    # 后台启动 crond
     nohup busybox crond -c "${box_run}" >/dev/null 2>&1 &
   else
     log Info "crond 已禁用"
@@ -188,19 +185,6 @@ box_check_bin() {
 
   log Info "${version_output}"
 }
-
-# create_tun_link() {
-  # mkdir -p /dev/net
-  # [ ! -L /dev/net/tun ] && ln -s /dev/tun /dev/net/tun
-
-  # if [ ! -c "/dev/net/tun" ]; then
-      # log Error "Cannot create /dev/net/tun. Possible reasons:"
-      # log Warning "Your system does not support the TUN/TAP driver."
-      # log Warning "Your system kernel version is not compatible with the TUN/TAP driver."
-      # sed -i 's/network_mode=.*/network_mode="tproxy"/g' "${settings}"
-      # exit 1
-  # fi
-# }
 
 prepare_singbox() {
   # 检查配置文件
@@ -660,9 +644,8 @@ box_bin_status() {
   fi
 }
 
-# ========== 新增 set_description 函数 ===========
 set_description() {
-  local status="$1" # running, stopped, idle
+  local status="$1"
   local error_msg="$2"
   local desc=""
   local ipv6_info=""
@@ -808,7 +791,6 @@ start_box() {
     log Info "当前 $(which busybox) v${busybox_code}"
   fi
 
-  # 检查权限，检查内核是否存在，删除旧日志，如有必要创建 TUN，运行内核，等待 1 秒
   box_permission
   box_check_bin
   box_check_logs

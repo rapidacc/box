@@ -629,7 +629,7 @@ cleanup_iptables() {
 
 log_iptables_results() {
   [ "${network_mode}" = "tun" ] && return 0
-  echo "" >> "${uid_log}"
+  echo "" >> "${box_run}/uid.log"
   echo "--- iptables 应用规则摘要 ---" >> "${box_run}/uid.log"
   echo "$(date)" >> "${box_run}/uid.log"
   echo "[Info] 操作: 添加 iptables 规则" >> "${box_run}/uid.log"
@@ -650,7 +650,7 @@ log_iptables_results() {
 }
 
 log_iptables_cleanup() {
-  echo "" >> "${uid_log}"
+  echo "" >> "${box_run}/uid.log"
   echo "--- iptables 处理结果 ---" >> "${box_run}/uid.log"
   echo "$(date)" >> "${box_run}/uid.log"
   echo "[Info] 操作: 清理 iptables 规则" >> "${box_run}/uid.log"
