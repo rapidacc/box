@@ -41,7 +41,11 @@ rules_add() {
   ip6tables -t mangle -F LOCAL_IP_V6
   ip -6 a | busybox awk '/inet6/ {print $2}' | grep -vE "^fe80|^::1|^fd00" | while read -r local_ipv6 ; do
     ${ip6tables} -t mangle -A LOCAL_IP_V6 -d $local_ipv6 -j ACCEPT
-    [ $? = "0" ] && echo "[Info]: 本地IP $local_ipv6，防环回规则已插入" >> ${logs}/net.log 2>&1
+    rv1=$?
+    # 为 IPv6 也添加 nat 表规则，保持与 IPv4 一致
+    ${ip6tables} -t nat -A LOCAL_IP_V6 -d $local_ipv6 -j ACCEPT 2>/dev/null
+    rv2=$?
+    ( [ $rv1 = "0" ] || [ $rv2 = "0" ] ) && echo "[Info]: 本地IP $local_ipv6，防环回规则已插入" >> ${logs}/net.log 2>&1
   done
 }
 

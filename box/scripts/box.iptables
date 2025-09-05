@@ -121,10 +121,16 @@ disable_ipv6() {
   sysctl -w net.ipv6.conf.all.forwarding=0
 
   sysctl -w net.ipv6.conf.all.accept_ra=0
-  sysctl -w net.ipv6.conf.wlan0.accept_ra=0
   sysctl -w net.ipv6.conf.all.disable_ipv6=1
   sysctl -w net.ipv6.conf.default.disable_ipv6=1
-  sysctl -w net.ipv6.conf.wlan0.disable_ipv6=1
+
+  # 动态检测并配置所有 WiFi 接口
+  for wifi_if in $(ip link show | grep -E 'wlan|wifi' | cut -d: -f2 | tr -d ' '); do
+    [ -n "$wifi_if" ] && {
+      sysctl -w net.ipv6.conf.${wifi_if}.accept_ra=0
+      sysctl -w net.ipv6.conf.${wifi_if}.disable_ipv6=1
+    }
+  done
 
   # 新增：彻底阻断 IPv6
   ip -6 rule add unreachable pref "${pref}"
@@ -135,13 +141,19 @@ ipv6_enable() {
   sysctl -w net.ipv6.conf.all.forwarding=1
 
   sysctl -w net.ipv6.conf.all.accept_ra=2
-  sysctl -w net.ipv6.conf.wlan0.accept_ra=2
   sysctl -w net.ipv6.conf.all.disable_ipv6=0
   sysctl -w net.ipv6.conf.default.disable_ipv6=0
-  sysctl -w net.ipv6.conf.wlan0.disable_ipv6=0
 
-  # 删除：彻底阻断 IPv6
-  ip -6 rule del unreachable pref "${pref}"
+  # 动态检测并配置所有 WiFi 接口
+  for wifi_if in $(ip link show | grep -E 'wlan|wifi' | cut -d: -f2 | tr -d ' '); do
+    [ -n "$wifi_if" ] && {
+      sysctl -w net.ipv6.conf.${wifi_if}.accept_ra=2
+      sysctl -w net.ipv6.conf.${wifi_if}.disable_ipv6=0
+    }
+  done
+
+  # 删除：彻底阻断 IPv6 - 添加错误处理，避免删除不存在的规则时出错
+  ip -6 rule del unreachable pref "${pref}" 2>/dev/null || true
 
   # 新增：阻止所有 IPv6 的 53 端口 UDP 出站流量，防止 IPv6 DNS 泄漏
   $IP6V -A OUTPUT -p udp --destination-port 53 -j DROP
@@ -239,6 +251,18 @@ start_redirect() {
     
     ${iptables} -t nat -A BOX_EXTERNAL -j LOCAL_IP_V4
     ${iptables} -t nat -A BOX_LOCAL -j LOCAL_IP_V4
+  else
+    # 为 IPv6 创建对应的 nat 表链
+    ${iptables} -t nat -N LOCAL_IP_V6 2>/dev/null || true
+    ${iptables} -t nat -F LOCAL_IP_V6 2>/dev/null || true
+    
+    for subnet6 in ${intranet6[@]} ; do
+      ${iptables} -t nat -A BOX_EXTERNAL -d ${subnet6} -j RETURN 2>/dev/null || true
+      ${iptables} -t nat -A BOX_LOCAL -d ${subnet6} -j RETURN 2>/dev/null || true
+    done
+    
+    ${iptables} -t nat -A BOX_EXTERNAL -j LOCAL_IP_V6 2>/dev/null || true
+    ${iptables} -t nat -A BOX_LOCAL -j LOCAL_IP_V6 2>/dev/null || true
 
     # 对非环回接口的所有TCP流量进行重定向，避免硬编码接口名称
     ${iptables} -t nat -A BOX_EXTERNAL -p tcp -i lo -j REDIRECT --to-ports "${redir_port}"
@@ -346,6 +370,14 @@ stop_redirect() {
     ${iptables} -t nat -X BOX_LOCAL
     ${iptables} -t nat -F LOCAL_IP_V4
     ${iptables} -t nat -X LOCAL_IP_V4
+  else
+    # 清理 IPv6 的 nat 表链
+    ${iptables} -t nat -F BOX_EXTERNAL 2>/dev/null || true
+    ${iptables} -t nat -X BOX_EXTERNAL 2>/dev/null || true
+    ${iptables} -t nat -F BOX_LOCAL 2>/dev/null || true
+    ${iptables} -t nat -X BOX_LOCAL 2>/dev/null || true
+    ${iptables} -t nat -F LOCAL_IP_V6 2>/dev/null || true
+    ${iptables} -t nat -X LOCAL_IP_V6 2>/dev/null || true
   fi
 }
 
@@ -553,12 +585,10 @@ stop_tproxy() {
     ip rule del fwmark "${fwmark}" table "${table}" pref "${pref}"
     ip route del local default dev lo table "${table}"
     ip route flush table "${table}"
-    ip rule del pref "${pref}"
   else
     ip -6 rule del fwmark "${fwmark}" table "${table}" pref "${pref}"
     ip -6 route del local default dev lo table "${table}"
     ip -6 route flush table "${table}"
-    ip -6 rule del pref "${pref}"
   fi
 
   ${iptables} -t mangle -D PREROUTING -j BOX_EXTERNAL
